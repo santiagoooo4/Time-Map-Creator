@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Tempo Map Creator PRO | Zoom, Scroll & Compás Proporcional</title>
+    <style>
+        body { background:#232332; color:#E2E2E2; font-family:sans-serif; margin:0; }
+        .container{ max-width:100%; margin:0; background:#181A1B; padding:20px; min-height:100vh; }
+        .top-bar { display:flex; gap:15px; align-items:center; margin-bottom:20px; background:#0a0a0a; padding:12px 15px; border-radius:8px; flex-wrap:wrap; }
+        .top-bar label { display:flex; align-items:center; gap:8px; }
+        .top-bar input[type=file], .top-bar input[type=number] { padding:4px 8px; }
+        .top-bar span { color:#aaa; font-size:0.9rem; }
+        h1{ color:#42d262; text-align:center; margin:0 0 20px 0; }
+        .tools-bar { display:flex; gap:8px; align-items:center; margin-bottom:15px; }
+        .tools-bar b { color:#aaa; margin-right:5px; }
+        .tools-bar button { border:none; background:#42d262; color:white; border-radius:5px; padding:8px 14px; cursor:pointer; font-size:0.9rem; }
+        .tools-bar button.active { background:#FF9800; }
+        .tools-bar button:hover { opacity:0.85; }
+        .waveform-canvas-wrap { position:relative; overflow-x:auto; overflow-y:hidden; background:#101112; border:2px solid #42d262; border-radius:6px; width:100%; height:240px; margin-bottom:15px; }
+        #waveform { display:block; cursor:crosshair; }
+        .zoom-controls { position:absolute; top:7px; right:13px; display:flex; gap:6px; align-items:center; background:#191a1b; border-radius:6px; border:1px solid #42d262; padding:5px; z-index:10; }
+        .zoom-controls button { padding:5px 8px; font-size:0.8rem; background:#42d262; color:white; border:none; border-radius:3px; }
+        .zoom-controls button:active { background:#2196F3; }
+        .zoom-controls span { color:#aaa; font-size:0.85rem; min-width:32px; text-align:center; }
+        .graph-wrap { position:relative; overflow-x:auto; overflow-y:hidden; background:#101112; border:2px solid #2196F3; border-radius:6px; width:100%; height:140px; margin-bottom:9px; }
+        .durcompas-wrap { position:relative; overflow-x:auto; overflow-y:hidden; background:#101112; border:2px solid #FFC107; border-radius:6px; width:100%; height:60px; margin-bottom:5px; }
+        #bpmGraph, #durCompasGraph { display:block; }
+        .bpm-graph-container { margin-bottom:7px; background:#0a0a0a; border-radius:6px; padding:10px; position:relative; }
+        .bpm-title { color:#29b6f6; font-size:14px; margin-bottom:7px; }
+        .dur-compas-title{ color:#FFC107; margin:7px 0 4px 0; font-size:14px;}
+        .controls-row { display:flex; gap:20px; flex-wrap:wrap; align-items:flex-start; margin-bottom:15px; }
+        .side-data { flex:0 0 200px; }
+        .data-panel { font-size:13px; color:#aaa; background:#0a0a0a; padding:12px; border-radius:5px; margin-bottom:10px; }
+        .data-panel span { display:block; margin-bottom:6px; }
+        .marker-list { max-height:150px; overflow-y:auto; background:#0a0a0a; margin:8px 0; padding:8px 10px; border-radius:5px; }
+        .marker-item { padding:4px; color:#fff; font-size:12px; margin-bottom:3px; }
+        .bottom-bar { display:flex; gap:15px; align-items:center; justify-content:space-between; background:#0a0a0a; padding:12px 15px; border-radius:8px; flex-wrap:wrap; }
+        .bottom-bar button { border:none; background:#42d262; color:white; border-radius:5px; padding:8px 14px; cursor:pointer; font-size:0.9rem; }
+        .bottom-bar button[disabled] { background:#666; cursor:not-allowed; }
+        .bottom-bar label { display:flex; align-items:center; gap:8px; font-size:0.9rem; }
+        .bottom-bar input[type=range] { width:100px; }
+        input[type=range] { accent-color:#42d262; }
+        button[disabled] { background:#666; cursor:not-allowed; }
+        .lag-input { width:70px; padding:6px; border:1px solid #42d262; background:#0a0a0a; color:#E2E2E2; border-radius:3px; }
+        .fragment-dialog-backdrop {position:fixed; top:0; left:0; width:100vw; height:100vh; background:#000A; z-index:20; display:flex; align-items:center; justify-content:center; }
+        .fragment-dialog { background:#222; border-radius:13px; box-shadow:0 2px 17px #000b; padding:32px 26px 20px 26px; min-width:330px; }
+        .fragment-dialog h3 { margin:0 0 15px 0; color:#42d262;}
+        .fragment-dialog label { color:#ccc; display:flex; gap:6px; align-items:center; margin:7px 0; font-size:1.09rem;}
+        .fragment-dialog input[type="number"] { width:90px; padding:5px 9px; border-radius:4px; background:#191a1b; border:1px solid #42d262; color:#e2e2e2;}
+        .fragment-dialog-buttons {margin-top:20px; display:flex; gap:18px; justify-content:right;}
+        .fragment-dialog-buttons button { padding: 7px 22px;}
+        .fragment-dialog .toggle-row {margin-bottom:10px; display:flex; align-items:center; gap:10px;}
+        @media(max-width:900px){
+          .controls-row { flex-direction:column; } .side-data { flex:1 0 100%; }
+          .top-bar { flex-direction:column; align-items:flex-start; }
+          .bottom-bar { flex-direction:column; align-items:flex-start; }
+          .zoom-controls { position:static !important; margin-top:10px;}
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>🎵 Tempo Map Creator PRO v3</h1>
+    <div class="top-bar">
+        <label><b>Audio:</b> <input type="file" id="file" accept="audio/*"></label>
+        <label><b>Metrónomo:</b> <input type="file" id="clickFile" accept="audio/*"></label>
+        <label><b>Input Lag (seg):</b> <input type="number" id="lagInput" class="lag-input" value="0.000" min="-1" max="1" step="0.001"></label>
+        <label><b>Cifra de compás:</b> <input type="number" min="1" step="1" id="cifraCompas" style="width:55px;padding:6px 9px;border-radius:5px;border:1px solid #42d262;background:#191a1b;color:#42d262;" value="4"></label>
+        <button id="export" disabled style="margin-left:auto;">💾 Exportar CSV</button>
+    </div>
+    <div class="tools-bar">
+        <b>Edición:</b>
+        <button id="normal" class="active">👆 Editar</button>
+        <button id="pencil">✏️ Añadir (M)</button>
+        <button id="eraser">🧹 Borrar</button>
+        <button id="undoBtn" disabled title="Deshacer">↩️</button>
+        <button id="redoBtn" disabled title="Rehacer">↪️</button>
+    </div>
+    <div class="waveform-canvas-wrap" id="waveformCont">
+        <canvas id="waveform"></canvas>
+        <div class="zoom-controls" id="zoomControls">
+            <button id="zoomout">−</button>
+            <span id="zoomval">1.0x</span>
+            <button id="zoomin">+</button>
+        </div>
+    </div>
+    <div class="graph-wrap" id="bpmGraphCont"><canvas id="bpmGraph"></canvas></div>
+    <div class="durcompas-wrap" id="durCompasGraphCont"><canvas id="durCompasGraph"></canvas></div>
+    <div class="controls-row">
+        <div>
+            <div class="bottom-bar" style="margin-bottom:15px;">
+                <div style="display:flex; gap:10px;">
+                    <button id="play" disabled>▶️ Play</button>
+                    <button id="pause" disabled>⏸️ Pause</button>
+                    <button id="stop" disabled>⏹️ Stop</button>
+                </div>
+                <div style="display:flex; gap:10px; align-items:center;">
+                    <label>Vol. música: <input type="range" id="mainVol" min="0" max="1" step="0.01" value="1"></label>
+                    <label>Vol. metrónomo: <input type="range" id="metroVol" min="0" max="1" step="0.01"></label>
+                    <button id="metroBtn" style="background:#333;">🔈 Metrónomo</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="side-data">
+        <div class="data-panel">
+            <span>Tiempo actual: <b id="currentTime">0.00</b>s</span>
+            <span>Duración: <b id="duration">0.00</b>s</span>
+            <span>Marcas: <b id="countMarkers">0</b></span>
+            <span>BPM Prom: <b id="avgBpm">--</b></span>
+        </div>
+        <b style="display:block; margin-bottom:8px;">Marcas:</b>
+        <div class="marker-list" id="markerList"></div>
+    </div>
+</div>
+<div id="fragmentDialogRoot"></div>
+<script>
+const ctx = new(window.AudioContext||window.webkitAudioContext)();
+
+
+let audioBuffer = null, musicSource = null, playing = false, currentTime = 0, playStartTimestamp = 0, pauseOffset = 0, scheduledAnim = null;
+let markers = [], waveformData = [], duration = 0;
+let currentTool = 'normal', isDragging = false, draggedMarker=null, zoom=1, scrollOffset=0;
+let clickBuffer = null, metronomeOn = false, metroClickVol=0.2, mainVol=1;
+let scheduledNextClickIdx = 0, metronomeClickTime = 0;
+let undoStack=[], redoStack=[];
+let inputLag = 0;
+let cifraCompas = 4;
+let audioFragment = { useFull: true, t0: 0, t1: 0 };
+let origAudioBuffer = null;
+
+
+const fileInput = document.getElementById('file'),
+    clickInput = document.getElementById('clickFile'),
+    playBtn = document.getElementById('play'),
+    pauseBtn = document.getElementById('pause'),
+    stopBtn = document.getElementById('stop'),
+    tools = {normal:document.getElementById('normal'),pencil:document.getElementById('pencil'),eraser:document.getElementById('eraser')},
+    zoomVal = document.getElementById('zoomval'),
+    zoIn = document.getElementById('zoomin'), zoOut = document.getElementById('zoomout'),
+    wave = document.getElementById('waveform'), waveCont = document.getElementById('waveformCont'),
+    bpmGraph = document.getElementById('bpmGraph'), bpmGraphCont = document.getElementById('bpmGraphCont'),
+    durCompasGraph = document.getElementById('durCompasGraph'), durCompasGraphCont = document.getElementById('durCompasGraphCont'),
+    zoomControls = document.getElementById('zoomControls'),
+    timeLabel = document.getElementById('currentTime'), durLabel = document.getElementById('duration'),
+    markerList = document.getElementById('markerList'), markersCount = document.getElementById('countMarkers'),
+    avgBpmLab = document.getElementById('avgBpm'), metroBtn = document.getElementById('metroBtn'),
+    mainVolCtrl = document.getElementById('mainVol'), metroVolCtrl = document.getElementById('metroVol'),
+    exportBtn = document.getElementById('export'), undoBtn=document.getElementById('undoBtn'), redoBtn=document.getElementById('redoBtn'),
+    lagInput = document.getElementById('lagInput'), fragmentDialogRoot = document.getElementById('fragmentDialogRoot'),
+    cifraCompasInput = document.getElementById('cifraCompas');
+
+
+metroVolCtrl.value = 0.2;
+cifraCompasInput.oninput = ()=>{
+    cifraCompas = Math.max(1,parseInt(cifraCompasInput.value)||4);
+    drawWaveform(); drawBpmGraph(); drawDurCompasGraph();
+};
+
+
+function enable(val){ [playBtn,pauseBtn,stopBtn,exportBtn].forEach(e=>e.disabled=!val);}
+
+
+function saveUndo() {
+    undoStack.push(JSON.stringify(markers));
+    undoBtn.disabled=undoStack.length<1; redoBtn.disabled=redoStack.length<1; 
+    if(undoStack.length>100) undoStack.shift();
+}
+function doUndo() {
+    if (!undoStack.length) return;
+    redoStack.push(JSON.stringify(markers));
+    markers = JSON.parse(undoStack.pop());
+    calcBPM(); updateMarkersInfo(); scheduleDrawWave(); drawBpmGraph(); drawDurCompasGraph();
+    undoBtn.disabled=undoStack.length<1; redoBtn.disabled=redoStack.length<1;
+}
+function doRedo() {
+    if (!redoStack.length) return;
+    undoStack.push(JSON.stringify(markers));
+    markers = JSON.parse(redoStack.pop());
+    calcBPM(); updateMarkersInfo(); scheduleDrawWave(); drawBpmGraph(); drawDurCompasGraph();
+    undoBtn.disabled=undoStack.length<1; redoBtn.disabled=redoStack.length<1;
+}
+undoBtn.onclick = doUndo; redoBtn.onclick = doRedo;
+
+
+document.addEventListener('keydown', function(e){
+    if((e.ctrlKey||e.metaKey) && e.key==='z' && !e.shiftKey) {doUndo();e.preventDefault();}
+    if(((e.ctrlKey||e.metaKey)&&(e.key==='y'||(e.key==='z'&&e.shiftKey)))){doRedo();e.preventDefault();}
+});
+
+
+function reset(){
+    if(musicSource){ try{ musicSource.stop(); }catch{} musicSource=null; }
+    audioBuffer = null; waveformData = []; markers = [];
+    playing = false; currentTime = 0; pauseOffset = 0; enable(false);
+    durLabel.textContent='0.00'; timeLabel.textContent='0.00'; undoStack=[]; redoStack=[];
+    setWaveWidth();drawWaveform();drawBpmGraph(); drawDurCompasGraph(); undoBtn.disabled=redoBtn.disabled=true;
+    syncScroll(0);
+}
+function setWaveWidth(){
+    const containerWidth = waveCont.clientWidth || 1200;
+    if(!audioBuffer){ wave.width = containerWidth; wave.height = 200; return; }
+    let pxPerSec = zoom*containerWidth/duration;
+    wave.width = Math.max(containerWidth, Math.ceil(duration*pxPerSec));
+    wave.height = 200;
+    bpmGraph.width = wave.width; bpmGraph.height = 140;
+    durCompasGraph.width = wave.width; durCompasGraph.height = 60;
+}
+fileInput.onchange = async e=>{
+    reset();
+    let file = fileInput.files[0]; if (!file) return;
+    const arrayBuffer = await file.arrayBuffer();
+    origAudioBuffer = await ctx.decodeAudioData(arrayBuffer);
+    showFragmentDialog(origAudioBuffer.duration);
+};
+function loadBufferFragment(buffer, t0, t1) {
+    let sampleRate = buffer.sampleRate;
+    let l = Math.floor((t1-t0)*sampleRate);
+    let offset = Math.floor(t0*sampleRate);
+    let c = buffer.numberOfChannels;
+    let newBuffer = ctx.createBuffer(c, l, sampleRate);
+    for(let ch=0; ch<c; ch++) {
+        let from = buffer.getChannelData(ch);
+        let to = newBuffer.getChannelData(ch);
+        for(let i=0;i<l;i++) to[i] = from[offset+i] || 0;
+    }
+    return newBuffer;
+}
+function finishLoadingAudioBuffer(){
+    if(audioFragment.useFull){
+        audioBuffer = origAudioBuffer;
+        audioFragment.t0 = 0;
+        audioFragment.t1 = origAudioBuffer.duration;
+    } else {
+        audioBuffer = loadBufferFragment(origAudioBuffer, audioFragment.t0, audioFragment.t1);
+    }
+    duration = audioBuffer.duration;
+    durLabel.textContent = duration.toFixed(2);
+    currentTime = 0; pauseOffset = 0;
+    enable(true); exportBtn.disabled = false;
+    processWave().then(()=>{setWaveWidth();drawWaveform();drawBpmGraph(); drawDurCompasGraph();});
+    syncScroll(0);
+}
+function showFragmentDialog(audioDur){
+    fragmentDialogRoot.innerHTML = '';
+    let backdrop = document.createElement('div');
+    backdrop.className = 'fragment-dialog-backdrop';
+    let dialog = document.createElement('div');
+    dialog.className = 'fragment-dialog';
+    dialog.innerHTML = `
+    <h3>Fragmento del audio 🎚️</h3>
+    <div class="toggle-row">
+        <input type="checkbox" id="toggleWholeAudio" checked>
+        <label for="toggleWholeAudio" style="color:#42d262;cursor:pointer;"><b>Usar TODO el audio</b></label>
+    </div>
+    <label>Inicio (seg): <input type="number" step="0.01" min="0" max="${(audioDur-0.1).toFixed(2)}" id="fragmentStart" value="0.00" disabled></label>
+    <label>Final (seg): <input type="number" step="0.01" min="0.1" max="${audioDur.toFixed(2)}" id="fragmentEnd" value="${audioDur.toFixed(2)}" disabled></label>
+    <div class="fragment-dialog-buttons">
+        <button id="fragmentOk">Cargar</button>
+    </div>
+    `;
+    backdrop.appendChild(dialog);
+    fragmentDialogRoot.appendChild(backdrop);
+    let toggle = dialog.querySelector('#toggleWholeAudio');
+    let start = dialog.querySelector('#fragmentStart');
+    let end = dialog.querySelector('#fragmentEnd');
+    toggle.onchange = ()=>{
+        let dis = toggle.checked;
+        start.disabled = end.disabled = dis;
+    }
+    dialog.querySelector('#fragmentOk').onclick = ()=>{
+        let useFull = toggle.checked;
+        if(!useFull){
+            let t0 = parseFloat(start.value)||0, t1 = parseFloat(end.value)||audioDur;
+            if(t1<=t0+0.05){ alert("El final debe ser mayor al inicio."); return; }
+            if(t0<0 || t1>audioDur){ alert("Rango fuera del audio."); return; }
+            audioFragment = { useFull:false, t0, t1 };
+        }else{
+            audioFragment = { useFull:true, t0:0, t1:audioDur };
+        }
+        fragmentDialogRoot.innerHTML = '';
+        finishLoadingAudioBuffer();
+    }
+};
+clickInput.onchange = async e=>{
+    let file = clickInput.files[0];
+    if(!file){ clickBuffer=null; return;}
+    const ab = await file.arrayBuffer();
+    clickBuffer = await ctx.decodeAudioData(ab);
+};
+async function processWave(){
+    if(!audioBuffer) return;
+    const raw = audioBuffer.getChannelData(0);
+    setWaveWidth();
+    let N = wave.width, step = Math.max(1, Math.floor(raw.length / N)), peak=0, vals=[];
+    for(let i=0;i<N;i++){
+        let sum=0, count=0;
+        for(let j=0;j<step;j++) {
+            let idx = i*step+j;
+            if(idx < raw.length){
+                let v=raw[idx];
+                sum+=v*v;
+                count++;
+            }
+        }
+        let rms = count>0 ? Math.sqrt(sum/count) : 0;
+        if(rms>peak) peak=rms;
+        vals.push(rms);
+    }
+    waveformData = peak ? vals.map(v=>v/peak) : vals;
+}
+function drawWaveform(){
+    let ctx2 = wave.getContext('2d'),N=wave.width,H=wave.height,M=H/2;
+    ctx2.clearRect(0,0,N,H);
+    ctx2.fillStyle="#101112"; ctx2.fillRect(0,0,N,H);
+    if(!waveformData.length){return;}
+    ctx2.strokeStyle="#666"; ctx2.beginPath(); ctx2.moveTo(0,M); ctx2.lineTo(N,M); ctx2.stroke();
+    ctx2.save(); ctx2.strokeStyle="#42d262"; ctx2.beginPath();
+    for(let i=0;i<N;i++){
+        let amp=waveformData[i];
+        let y1 = M - (amp*M*0.95);
+        let y2 = M + (amp*M*0.95);
+        ctx2.moveTo(i,y1); ctx2.lineTo(i,y2);
+    }
+    ctx2.stroke(); ctx2.restore();
+    markers.forEach((mk,idx)=>{
+        const x= mk.time/duration*N;
+        ctx2.save();
+        let color = "#00bcd4", alpha=1.0;
+        if((idx)%cifraCompas!==0) alpha=0.52;
+        if(mk===draggedMarker){ color="#FFFF00"; alpha=1.0; }
+        ctx2.globalAlpha=alpha;
+        ctx2.strokeStyle= color;
+        ctx2.beginPath(); ctx2.moveTo(x,0); ctx2.lineTo(x,H); ctx2.stroke(); ctx2.restore();
+        ctx2.save();
+        ctx2.globalAlpha=alpha;
+        ctx2.fillStyle= color;
+        ctx2.beginPath(); ctx2.arc(x,14,6,0,2*Math.PI); ctx2.fill();
+        ctx2.restore();
+    });
+    ctx2.save();
+    ctx2.globalAlpha=1.0;
+    ctx2.strokeStyle="#ff3243"; ctx2.beginPath();
+    let px = currentTime/duration*N; ctx2.moveTo(px,0); ctx2.lineTo(px,H); ctx2.stroke(); ctx2.restore();
+}
+function drawBpmGraph(){
+    const ctxG = bpmGraph.getContext('2d');
+    const W = bpmGraph.width, H = bpmGraph.height;
+    ctxG.clearRect(0,0,W,H);
+    ctxG.fillStyle="#101112"; ctxG.fillRect(0,0,W,H);
+    if(markers.length<2) {
+        ctxG.fillStyle="#666"; ctxG.font="16px Arial";
+        ctxG.fillText("Añade al menos dos marcas para ver la variación de BPM",18,38); return;
+    }
+    let bpms = markers.map(m=>m.bpm||0).filter(x=>x);
+    let minBpm = Math.floor(Math.min(...bpms)*0.92), maxBpm = Math.ceil(Math.max(...bpms)*1.08);
+    let G = H, left=44, bot=18, top=18;
+    ctxG.strokeStyle="#2196F3"; ctxG.beginPath();
+    ctxG.moveTo(left,top); ctxG.lineTo(left,G-bot); ctxG.lineTo(W-12,G-bot); ctxG.stroke();
+    ctxG.fillStyle="#aaa"; ctxG.font="12px Arial";
+    for(let y=top;y<G-bot;y+=28){
+        let bpmVal = maxBpm-(y-top)/(G-bot-top)*(maxBpm-minBpm);
+        ctxG.fillText(bpmVal.toFixed(0),3,y+4);
+        ctxG.strokeStyle="#333"; ctxG.beginPath();
+        ctxG.moveTo(left-2,y); ctxG.lineTo(W-12,y); ctxG.stroke();
+    }
+    ctxG.save(); ctxG.strokeStyle="#29b6f6"; ctxG.lineWidth=3; ctxG.beginPath();
+    let pts = [];
+    for(let i=1;i<markers.length;i++){
+        let x=markers[i].time/duration*(W-1);
+        let y=top+(G-bot-top)*(1-(markers[i].bpm-minBpm)/(maxBpm-minBpm)); 
+        pts.push([x,y]);
+    }
+    function splineTo(points){
+        if(points.length<2) return;
+        ctxG.moveTo(points[0][0],points[0][1]);
+        for(let i=0;i<points.length-1;i++){
+            let p0=points[i-1]||points[i],p1=points[i],p2=points[i+1],p3=points[i+2]||points[i+1];
+            for(let t=0;t<=1;t+=0.08){
+                let tt = t*t, ttt = tt*t;
+                let x = 0.5*((2*p1[0]) + (-p0[0]+p2[0])*t + (2*p0[0]-5*p1[0]+4*p2[0]-p3[0])*tt + (-p0[0]+3*p1[0]-3*p2[0]+p3[0])*ttt);
+                let y = 0.5*((2*p1[1]) + (-p0[1]+p2[1])*t + (2*p0[1]-5*p1[1]+4*p2[1]-p3[1])*tt + (-p0[1]+3*p1[1]-3*p2[1]+p3[1])*ttt);
+                ctxG.lineTo(x,y);
+            }
+        }
+    }
+    splineTo(pts); ctxG.stroke(); ctxG.restore();
+    pts.forEach(pt=>{
+        ctxG.fillStyle="#fff"; ctxG.beginPath();
+        ctxG.arc(pt[0],pt[1],4,0,2*Math.PI); ctxG.fill();
+        ctxG.strokeStyle="#29b6f6"; ctxG.lineWidth=2;
+        ctxG.beginPath();
+        ctxG.arc(pt[0],pt[1],4,0,2*Math.PI);
+        ctxG.stroke();
+    });
+}
+function drawDurCompasGraph(){
+    const ctxD = durCompasGraph.getContext('2d');
+    const W = durCompasGraph.width, H = durCompasGraph.height;
+    ctxD.clearRect(0,0,W,H);
+    ctxD.fillStyle="#101112"; ctxD.fillRect(0,0,W,H);
+    if(markers.length<cifraCompas+1){
+        ctxD.fillStyle="#666"; ctxD.font="13px Arial"; ctxD.fillText("Marca al menos "+(cifraCompas+1)+" tiempos para ver la duración de compás",14,32); return;
+    }
+    let compases=[], xs=[];
+    for(let i=cifraCompas;i<markers.length;i+=cifraCompas){
+        let tIni=markers[i-cifraCompas].time, tFin=markers[i].time;
+        let compIdx = Math.floor(i/cifraCompas);
+        compases.push({ valor: tFin-tIni, idx: compIdx, x: markers[i].time/duration*(W-1) });
+    }
+    let minC = Math.min(...compases.map(c=>c.valor)), maxC = Math.max(...compases.map(c=>c.valor));
+    let G = H, left=44, bot=14, top=14;
+    ctxD.strokeStyle="#FFC107"; ctxD.lineWidth=3; ctxD.beginPath();
+    let pts = [];
+    for(let c of compases){
+        let x = c.x;
+        let y = top+(G-bot-top)*(1-(c.valor-minC)/(maxC-minC||1));
+        pts.push([x,y]);
+    }
+    function splineTo(points){
+        if(points.length<2) return;
+        ctxD.moveTo(points[0][0],points[0][1]);
+        for(let i=0;i<points.length-1;i++){
+            let p0=points[i-1]||points[i],p1=points[i],p2=points[i+1],p3=points[i+2]||points[i+1];
+            for(let t=0;t<=1;t+=0.08){
+                let tt = t*t, ttt = tt*t;
+                let x = 0.5*((2*p1[0]) + (-p0[0]+p2[0])*t + (2*p0[0]-5*p1[0]+4*p2[0]-p3[0])*tt + (-p0[0]+3*p1[0]-3*p2[0]+p3[0])*ttt);
+                let y = 0.5*((2*p1[1]) + (-p0[1]+p2[1])*t + (2*p0[1]-5*p1[1]+4*p2[1]-p3[1])*tt + (-p0[1]+3*p1[1]-3*p2[1]+p3[1])*ttt);
+                ctxD.lineTo(x,y);
+            }
+        }
+    }
+    splineTo(pts); ctxD.stroke(); ctxD.restore();
+    pts.forEach(pt=>{
+        ctxD.fillStyle="#FFD700"; ctxD.beginPath();
+        ctxD.arc(pt[0],pt[1],4,0,2*Math.PI); ctxD.fill();
+        ctxD.strokeStyle="#FFC107"; ctxD.lineWidth=2;
+        ctxD.beginPath();
+        ctxD.arc(pt[0],pt[1],4,0,2*Math.PI);
+        ctxD.stroke();
+    });
+    // ejes valores
+    ctxD.fillStyle="#FFD700"; ctxD.font="12px Arial"; ctxD.textAlign="right";
+    ctxD.fillText(maxC.toFixed(2),42,top+6);
+    ctxD.fillText(minC.toFixed(2),42,H-bot+9);
+}
+
+
+function syncScroll(pos){
+    waveCont.scrollLeft = pos;
+    bpmGraphCont.scrollLeft = pos;
+    durCompasGraphCont.scrollLeft = pos;
+}
+waveCont.addEventListener('scroll', ()=>{ 
+    syncScroll(waveCont.scrollLeft);
+});
+bpmGraphCont.addEventListener('scroll', ()=>{ 
+    syncScroll(bpmGraphCont.scrollLeft);
+});
+durCompasGraphCont.addEventListener('scroll', ()=>{ 
+    syncScroll(durCompasGraphCont.scrollLeft);
+});
+function scheduleDrawWave(){ requestAnimationFrame(drawWaveform);}
+function updateMarkersInfo(){
+    markersCount.textContent = markers.length;
+    let html="";
+    markers.forEach((m,i)=>{
+        html += `<div class="marker-item">#${i+1}: ${m.time.toFixed(3)}s — ${m.bpm?m.bpm.toFixed(2)+' BPM':'N/A'}</div>`;
+    });
+    markerList.innerHTML = html || '<span style="color:#888">No hay marcas aún</span>';
+}
+function calcBPM(){
+    for(let i=1;i<markers.length;i++){
+        let t = markers[i].time-markers[i-1].time;
+        let bpm = 60/t;markers[i].bpm = bpm;
+    }
+    if(markers.length) markers[0].bpm = markers.length>1?markers[1].bpm:null;
+    let bpmArr = markers.map(m=>m.bpm).filter(x=>x!=null);
+    avgBpmLab.textContent = bpmArr.length? (bpmArr.reduce((a,b,)=>a+b,0)/bpmArr.length).toFixed(1) : '--';
+}
+function addMarker(rawtime){
+    saveUndo();
+    let time = rawtime + Number(inputLag);
+    time = Math.max(0.001,Math.min(time,duration-0.001));
+    markers.push({time,bpm:null});
+    markers.sort((a,b)=>a.time-b.time); 
+    calcBPM(); updateMarkersInfo(); scheduleDrawWave(); drawBpmGraph(); drawDurCompasGraph();
+    redoStack=[]; redoBtn.disabled=true;
+}
+
+
+function findMarkerAt(x) {
+    if (markers.length === 0) return null;
+    // x: posición en pixels relativa al canvas (con scroll incluido)
+    let N = wave.width;
+    let minDistPx = 12; // 12 px es bueno para alto zoom, puedes ajustar
+    let closest = null;
+    let closestPxDist = minDistPx;
+    for (let m of markers) {
+        let markerX = m.time / duration * N;
+        let distPx = Math.abs(markerX - x);
+        if (distPx < closestPxDist) {
+            closestPxDist = distPx;
+            closest = m;
+        }
+    }
+    return closest;
+}
+
+function removeMarkerAt(x) {
+    // x: posición en pixels relativa al canvas (con scroll incluido)
+    let N = wave.width;
+    let minDistPx = 12;
+    let closestIdx = -1;
+    let closestPxDist = minDistPx;
+    for (let i = 0; i < markers.length; i++) {
+        let markerX = markers[i].time / duration * N;
+        let distPx = Math.abs(markerX - x);
+        if (distPx < closestPxDist) {
+            closestPxDist = distPx;
+            closestIdx = i;
+        }
+    }
+    if (closestIdx >= 0) {
+        saveUndo();
+        markers.splice(closestIdx, 1);
+        calcBPM(); updateMarkersInfo(); scheduleDrawWave(); drawBpmGraph(); drawDurCompasGraph();
+        redoStack=[]; redoBtn.disabled=true;
+    }
+}
+
+wave.addEventListener('mousedown', e=>{
+    const rect = wave.getBoundingClientRect();
+    const x = e.clientX-rect.left + waveCont.scrollLeft;
+    const time = (x/wave.width)*duration;
+    if(currentTool==='normal'){
+        let m = findMarkerAt(x);
+        if(m){ saveUndo(); draggedMarker = m; isDragging = true; scheduleDrawWave(); drawBpmGraph(); drawDurCompasGraph(); }
+        else{
+            pauseOffset = Math.max(0, Math.min(time, duration-0.001));
+            currentTime = pauseOffset;
+            drawWaveform(); drawBpmGraph(); drawDurCompasGraph(); updateTimeLabel();
+        }
+    }else if(currentTool==='pencil'){ 
+        addMarker(time);
+    }else if(currentTool==='eraser'){ 
+        removeMarkerAt(x);
+    }
+});
+wave.addEventListener('mousemove',e=>{
+    if(isDragging && draggedMarker){
+        const rect = wave.getBoundingClientRect();
+        const x = e.clientX-rect.left + waveCont.scrollLeft;
+        let time = Math.max(0,Math.min((x/wave.width)*duration,duration));
+        draggedMarker.time = time;
+        markers.sort((a,b)=>a.time-b.time); 
+        calcBPM(); updateMarkersInfo(); scheduleDrawWave(); drawBpmGraph(); drawDurCompasGraph();
+    }
+});
+wave.addEventListener('mouseup',()=>{
+    isDragging=false;
+    if(draggedMarker){ draggedMarker=null; scheduleDrawWave(); drawBpmGraph(); drawDurCompasGraph(); }
+});
+wave.addEventListener('mouseleave',()=>{
+    isDragging=false;
+    if(draggedMarker){ draggedMarker=null; scheduleDrawWave(); drawBpmGraph(); drawDurCompasGraph(); }
+});
+Object.entries(tools).forEach(([tool,btn])=>{
+    btn.onclick=()=>{
+        currentTool = tool;
+        Object.values(tools).forEach(b=>b.classList.remove('active'));
+        btn.classList.add('active');
+    };
+});
+zoomVal.textContent = '1.0x';
+function updateZoomUi(val){ zoomVal.textContent = Number(val).toFixed(1)+'x'; }
+zoIn.onclick=()=>{
+    zoom = Math.min(50, parseFloat(zoom)+0.2);
+    updateZoomUi(zoom);
+    processWave().then(()=>{setWaveWidth();drawWaveform();drawBpmGraph(); drawDurCompasGraph();});
+};
+zoOut.onclick=()=>{
+    zoom = Math.max(1, parseFloat(zoom)-0.2);
+    updateZoomUi(zoom);
+    processWave().then(()=>{setWaveWidth();drawWaveform();drawBpmGraph(); drawDurCompasGraph();});
+};
+waveCont.addEventListener('wheel', (e) => {
+    if(e.ctrlKey) {
+        e.preventDefault();
+        let delta = e.deltaY > 0 ? -0.2 : 0.2;
+        zoom = Math.max(1,Math.min(50, parseFloat(zoom)+delta));
+        updateZoomUi(zoom);
+        processWave().then(()=>{setWaveWidth();drawWaveform();drawBpmGraph(); drawDurCompasGraph();});
+    }
+}, {passive: false});    
+mainVolCtrl.oninput=()=>{mainVol=parseFloat(mainVolCtrl.value);}
+metroVolCtrl.oninput=()=>{metroClickVol=parseFloat(metroVolCtrl.value);}
+lagInput.oninput=()=>{inputLag=Number(lagInput.value);}
+metroBtn.onclick = function(){
+    metronomeOn = !metronomeOn;
+    metroBtn.style.background = metronomeOn ? "#46f" : "#333";
+    metroBtn.innerHTML = metronomeOn ? "🔔 Metrónomo" : "🔈 Metrónomo";
+};
+function updateTimeLabel(){ timeLabel.textContent = currentTime.toFixed(2);}
+function playMetronomeClick(){
+    if(clickBuffer){
+        const cs = ctx.createBufferSource();
+        cs.buffer = clickBuffer;
+        const gain = ctx.createGain();
+        gain.gain.value = metroClickVol;
+        cs.connect(gain).connect(ctx.destination);
+        cs.start();
+    } else {
+        const osc=ctx.createOscillator(),g=ctx.createGain();
+        osc.type='square'; osc.frequency.value=1600; g.gain.value=metroClickVol;
+        osc.connect(g).connect(ctx.destination);
+        osc.start(); osc.stop(ctx.currentTime+0.035);
+        g.gain.linearRampToValueAtTime(0.001,ctx.currentTime+0.035);
+    }
+}
+function animate(){
+    drawWaveform();drawBpmGraph();drawDurCompasGraph();updateTimeLabel();
+    if(playing && markers.length){
+        let tNow = currentTime, tBefore = metronomeClickTime;
+        if (tNow<tBefore){ scheduledNextClickIdx=0;tBefore=0;}
+        while(scheduledNextClickIdx<markers.length && markers[scheduledNextClickIdx].time<=tNow){
+            if(markers[scheduledNextClickIdx].time>tBefore && metronomeOn) playMetronomeClick();
+            scheduledNextClickIdx++;
+        }
+        metronomeClickTime = tNow;
+    }
+    if(playing) scheduledAnim = requestAnimationFrame(step);
+}
+function step(){
+    let now = ctx.currentTime;
+    if(playStartTimestamp===0) playStartTimestamp = now;
+    currentTime = pauseOffset + (now-playStartTimestamp);
+    if(currentTime>=duration){ stopMusic(); return;}
+    if(musicSource) musicSource.playbackRate.value=1;
+    if(musicSource) musicSource.gain.gain.value = mainVol;
+    animate();
+}
+function stopMusic(){
+    playing=false; pauseOffset=0; currentTime=0;
+    if(musicSource) try{ musicSource.stop(); }catch{} musicSource=null;
+    cancelAnimationFrame(scheduledAnim);drawWaveform();drawBpmGraph();drawDurCompasGraph();updateTimeLabel();
+}
+function pauseMusic(){
+    playing=false;if(musicSource) try{ musicSource.stop(); }catch{} musicSource=null;
+    pauseOffset = currentTime;
+    cancelAnimationFrame(scheduledAnim);drawWaveform();drawBpmGraph();drawDurCompasGraph();updateTimeLabel();
+}
+function seekMusic(t){ currentTime=t;pauseOffset=currentTime;if(playing){ startMusic();}}
+function startMusic(){
+    if(!audioBuffer) return;
+    if(musicSource) try{ musicSource.stop(); }catch{} musicSource=null;
+    musicSource = ctx.createBufferSource();
+    musicSource.buffer = audioBuffer;
+    const gainNode = ctx.createGain();
+    gainNode.gain.value=mainVol;
+    musicSource.connect(gainNode).connect(ctx.destination);
+    scheduledNextClickIdx=0; metronomeClickTime=currentTime; playStartTimestamp=ctx.currentTime;
+    musicSource.start(0,currentTime);
+    musicSource.onended = stopMusic;
+    playing = true; scheduledAnim = requestAnimationFrame(step); musicSource.gain = gainNode;
+}
+playBtn.onclick=()=>{if(!audioBuffer) return;if(!playing){ startMusic(); }};
+pauseBtn.onclick=()=>{pauseMusic();};
+stopBtn.onclick=()=>{stopMusic();};
+document.addEventListener('keydown', e=>{
+    if(e.code==='Space' && !e.repeat && !e.ctrlKey && !e.altKey){
+        e.preventDefault(); 
+        if(!playing) startMusic();
+        else pauseMusic();
+    }
+    if((e.code==='KeyM' || e.key==='m') && !e.ctrlKey && !e.altKey && playing){
+        e.preventDefault(); 
+        addMarker(currentTime);
+    }
+    if(e.code==='ArrowLeft'){
+        e.preventDefault();
+        seekMusic(Math.max(0, currentTime-3));
+        drawWaveform(); drawBpmGraph(); drawDurCompasGraph();updateTimeLabel();
+    }
+    if(e.code==='ArrowRight'){
+        e.preventDefault();
+        seekMusic(Math.min(duration, currentTime+3));
+        drawWaveform(); drawBpmGraph(); drawDurCompasGraph();updateTimeLabel();
+    }
+});
+exportBtn.onclick=()=>{
+    if(!markers.length){
+        alert("No hay marcas para exportar.");
+        return;
+    }
+    let csv='Tiempo (segundos),BPM\n';
+    markers.forEach(m=>{ 
+        csv+=`${m.time.toFixed(3)},${m.bpm?m.bpm.toFixed(2):'N/A'}\n`; 
+    });
+    let blob = new Blob([csv],{type:'text/csv'});
+    let a = document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download='tempo_map.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+};
+reset();
+</script>
+</body>
+</html>
