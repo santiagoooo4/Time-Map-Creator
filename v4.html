@@ -60,7 +60,7 @@
 </head>
 <body>
 <div class="container">
-    <h1>🎵 Tempo Map Creator PRO v3</h1>
+    <h1>🎵 Tempo Map Creator PRO v4</h1>
     <div class="top-bar">
         <label><b>Audio:</b> <input type="file" id="file" accept="audio/*"></label>
         <label><b>Metrónomo:</b> <input type="file" id="clickFile" accept="audio/*"></label>
@@ -487,51 +487,26 @@ function addMarker(rawtime){
     calcBPM(); updateMarkersInfo(); scheduleDrawWave(); drawBpmGraph(); drawDurCompasGraph();
     redoStack=[]; redoBtn.disabled=true;
 }
-
-
-function findMarkerAt(x) {
-    if (markers.length === 0) return null;
-    // x: posición en pixels relativa al canvas (con scroll incluido)
-    let N = wave.width;
-    let minDistPx = 12; // 12 px es bueno para alto zoom, puedes ajustar
-    let closest = null;
-    let closestPxDist = minDistPx;
-    for (let m of markers) {
-        let markerX = m.time / duration * N;
-        let distPx = Math.abs(markerX - x);
-        if (distPx < closestPxDist) {
-            closestPxDist = distPx;
-            closest = m;
+function removeMarkerAt(x){
+    saveUndo();
+    const t = x/wave.width*duration;
+    for(let i=0;i<markers.length;i++){
+        if(Math.abs(markers[i].time-t)<0.20){
+            markers.splice(i,1); 
+            calcBPM(); updateMarkersInfo(); scheduleDrawWave(); drawBpmGraph(); drawDurCompasGraph();
+            break;
         }
     }
-    return closest;
+    redoStack=[]; redoBtn.disabled=true;
 }
-
-function removeMarkerAt(x) {
-    // x: posición en pixels relativa al canvas (con scroll incluido)
-    let N = wave.width;
-    let minDistPx = 12;
-    let closestIdx = -1;
-    let closestPxDist = minDistPx;
-    for (let i = 0; i < markers.length; i++) {
-        let markerX = markers[i].time / duration * N;
-        let distPx = Math.abs(markerX - x);
-        if (distPx < closestPxDist) {
-            closestPxDist = distPx;
-            closestIdx = i;
-        }
-    }
-    if (closestIdx >= 0) {
-        saveUndo();
-        markers.splice(closestIdx, 1);
-        calcBPM(); updateMarkersInfo(); scheduleDrawWave(); drawBpmGraph(); drawDurCompasGraph();
-        redoStack=[]; redoBtn.disabled=true;
-    }
+function findMarkerAt(x){
+    const t = x/wave.width*duration;
+    for(let m of markers){ if(Math.abs(m.time-t)<0.20) return m; }
+    return null;
 }
-
 wave.addEventListener('mousedown', e=>{
     const rect = wave.getBoundingClientRect();
-    const x = e.clientX-rect.left + waveCont.scrollLeft;
+    const x = e.clientX - rect.left;
     const time = (x/wave.width)*duration;
     if(currentTool==='normal'){
         let m = findMarkerAt(x);
@@ -550,7 +525,7 @@ wave.addEventListener('mousedown', e=>{
 wave.addEventListener('mousemove',e=>{
     if(isDragging && draggedMarker){
         const rect = wave.getBoundingClientRect();
-        const x = e.clientX-rect.left + waveCont.scrollLeft;
+        const x = e.clientX - rect.left;
         let time = Math.max(0,Math.min((x/wave.width)*duration,duration));
         draggedMarker.time = time;
         markers.sort((a,b)=>a.time-b.time); 
