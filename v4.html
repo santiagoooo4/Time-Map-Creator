@@ -50,17 +50,69 @@
         .fragment-dialog-buttons {margin-top:20px; display:flex; gap:18px; justify-content:right;}
         .fragment-dialog-buttons button { padding: 7px 22px;}
         .fragment-dialog .toggle-row {margin-bottom:10px; display:flex; align-items:center; gap:10px;}
+        /* TapTempo + BPM panel */
+        .panels-row { display:flex; gap:18px; margin-bottom:19px; align-items:center; }
+        .tap-tempo-box {
+            background:#212334;
+            border:2px solid #42d262;
+            border-radius:12px;
+            width:90px;
+            height:90px;
+            display:flex;
+            flex-direction:column;
+            align-items:center;
+            justify-content:center;
+            cursor:pointer;
+            box-shadow: 0 0 6px #42d2626a;
+            transition: background 0.2s;
+        }
+        .tap-tempo-box:active {
+            background:#32a852;
+        }
+        .tap-tempo-icon {
+            font-size:2.7rem;
+            margin-bottom:7px;
+        }
+        .tap-tempo-label {
+            color:#42d262;
+            font-weight:bold;
+            font-size:1rem;
+        }
+        .bpm-panel {
+            background:#1d2234;
+            border:2px solid #29b6f6;
+            border-radius:12px;
+            min-width:120px;
+            height:90px;
+            display:flex;
+            flex-direction:column;
+            justify-content:center;
+            align-items:center;
+            box-shadow: 0 0 6px #29b6f66a;
+        }
+        .bpm-label {
+            color:#29b6f6;
+            font-size:1.15rem;
+            font-weight:bold;
+            margin-bottom:4px;
+        }
+        .bpm-value {
+            color:#fff;
+            font-size:2.1rem;
+            font-weight:bold;
+        }
         @media(max-width:900px){
           .controls-row { flex-direction:column; } .side-data { flex:1 0 100%; }
           .top-bar { flex-direction:column; align-items:flex-start; }
           .bottom-bar { flex-direction:column; align-items:flex-start; }
           .zoom-controls { position:static !important; margin-top:10px;}
+          .panels-row { flex-direction:column; gap:7px; }
         }
     </style>
 </head>
 <body>
 <div class="container">
-    <h1>🎵 Tempo Map Creator PRO v4</h1>
+    <h1>🎵 Tempo Map Creator PRO v3</h1>
     <div class="top-bar">
         <label><b>Audio:</b> <input type="file" id="file" accept="audio/*"></label>
         <label><b>Metrónomo:</b> <input type="file" id="clickFile" accept="audio/*"></label>
@@ -68,6 +120,19 @@
         <label><b>Cifra de compás:</b> <input type="number" min="1" step="1" id="cifraCompas" style="width:55px;padding:6px 9px;border-radius:5px;border:1px solid #42d262;background:#191a1b;color:#42d262;" value="4"></label>
         <button id="export" disabled style="margin-left:auto;">💾 Exportar CSV</button>
     </div>
+
+    <!-- Panel Tap Tempo y BPM actual -->
+    <div class="panels-row">
+        <div class="tap-tempo-box" id="tapTempoBtn" title="Añadir marca al tempo actual mediante tap">
+            <span class="tap-tempo-icon">🥁</span>
+            <span class="tap-tempo-label">Tap Tempo</span>
+        </div>
+        <div class="bpm-panel" id="bpmPanel">
+            <span class="bpm-label">BPM Actual</span>
+            <span class="bpm-value" id="actualBpmVal">--</span>
+        </div>
+    </div>
+
     <div class="tools-bar">
         <b>Edición:</b>
         <button id="normal" class="active">👆 Editar</button>
@@ -148,7 +213,10 @@ const fileInput = document.getElementById('file'),
     mainVolCtrl = document.getElementById('mainVol'), metroVolCtrl = document.getElementById('metroVol'),
     exportBtn = document.getElementById('export'), undoBtn=document.getElementById('undoBtn'), redoBtn=document.getElementById('redoBtn'),
     lagInput = document.getElementById('lagInput'), fragmentDialogRoot = document.getElementById('fragmentDialogRoot'),
-    cifraCompasInput = document.getElementById('cifraCompas');
+    cifraCompasInput = document.getElementById('cifraCompas'),
+    tapTempoBtn = document.getElementById('tapTempoBtn'),
+    bpmPanel = document.getElementById('bpmPanel'),
+    actualBpmVal = document.getElementById('actualBpmVal');
 
 
 metroVolCtrl.value = 0.2;
@@ -195,7 +263,7 @@ function reset(){
     playing = false; currentTime = 0; pauseOffset = 0; enable(false);
     durLabel.textContent='0.00'; timeLabel.textContent='0.00'; undoStack=[]; redoStack=[];
     setWaveWidth();drawWaveform();drawBpmGraph(); drawDurCompasGraph(); undoBtn.disabled=redoBtn.disabled=true;
-    syncScroll(0);
+    syncScroll(0); updateBpmPanel();
 }
 function setWaveWidth(){
     const containerWidth = waveCont.clientWidth || 1200;
@@ -239,7 +307,7 @@ function finishLoadingAudioBuffer(){
     currentTime = 0; pauseOffset = 0;
     enable(true); exportBtn.disabled = false;
     processWave().then(()=>{setWaveWidth();drawWaveform();drawBpmGraph(); drawDurCompasGraph();});
-    syncScroll(0);
+    syncScroll(0); updateBpmPanel();
 }
 function showFragmentDialog(audioDur){
     fragmentDialogRoot.innerHTML = '';
@@ -366,8 +434,10 @@ function drawBpmGraph(){
     }
     ctxG.save(); ctxG.strokeStyle="#29b6f6"; ctxG.lineWidth=3; ctxG.beginPath();
     let pts = [];
+    // Corrección: Cada punto debe estar alineado con el momento anterior (markers[i-1])
     for(let i=1;i<markers.length;i++){
-        let x=markers[i].time/duration*(W-1);
+        // Tiempo del marcador anterior contra el bpm calculado
+        let x=markers[i-1].time/duration*(W-1);
         let y=top+(G-bot-top)*(1-(markers[i].bpm-minBpm)/(maxBpm-minBpm)); 
         pts.push([x,y]);
     }
@@ -402,41 +472,42 @@ function drawDurCompasGraph(){
     if(markers.length<cifraCompas+1){
         ctxD.fillStyle="#666"; ctxD.font="13px Arial"; ctxD.fillText("Marca al menos "+(cifraCompas+1)+" tiempos para ver la duración de compás",14,32); return;
     }
-    let compases=[], xs=[];
+    let compases=[];
     for(let i=cifraCompas;i<markers.length;i+=cifraCompas){
         let tIni=markers[i-cifraCompas].time, tFin=markers[i].time;
         let compIdx = Math.floor(i/cifraCompas);
-        compases.push({ valor: tFin-tIni, idx: compIdx, x: markers[i].time/duration*(W-1) });
+        compases.push({ valor: tFin-tIni, idx: compIdx, x: tIni/duration*(W-1) });
     }
     let minC = Math.min(...compases.map(c=>c.valor)), maxC = Math.max(...compases.map(c=>c.valor));
     let G = H, left=44, bot=14, top=14;
-    ctxD.strokeStyle="#FFC107"; ctxD.lineWidth=3; ctxD.beginPath();
-    let pts = [];
-    for(let c of compases){
-        let x = c.x;
-        let y = top+(G-bot-top)*(1-(c.valor-minC)/(maxC-minC||1));
-        pts.push([x,y]);
-    }
-    function splineTo(points){
-        if(points.length<2) return;
-        ctxD.moveTo(points[0][0],points[0][1]);
-        for(let i=0;i<points.length-1;i++){
-            let p0=points[i-1]||points[i],p1=points[i],p2=points[i+1],p3=points[i+2]||points[i+1];
-            for(let t=0;t<=1;t+=0.08){
-                let tt = t*t, ttt = tt*t;
-                let x = 0.5*((2*p1[0]) + (-p0[0]+p2[0])*t + (2*p0[0]-5*p1[0]+4*p2[0]-p3[0])*tt + (-p0[0]+3*p1[0]-3*p2[0]+p3[0])*ttt);
-                let y = 0.5*((2*p1[1]) + (-p0[1]+p2[1])*t + (2*p0[1]-5*p1[1]+4*p2[1]-p3[1])*tt + (-p0[1]+3*p1[1]-3*p2[1]+p3[1])*ttt);
-                ctxD.lineTo(x,y);
-            }
+
+    // --- Modificación: unir los puntos con líneas rectas ---
+    ctxD.save();
+    ctxD.strokeStyle = "#FFC107";
+    ctxD.lineWidth = 3;
+    ctxD.beginPath();
+    if (compases.length > 0) {
+        let y0 = top+(G-bot-top)*(1-(compases[0].valor-minC)/(maxC-minC||1));
+        ctxD.moveTo(compases[0].x, y0);
+        for (let i=1; i<compases.length; i++) {
+            // Línea recta al siguiente punto
+            let y = top+(G-bot-top)*(1-(compases[i].valor-minC)/(maxC-minC||1));
+            ctxD.lineTo(compases[i].x, y);
         }
     }
-    splineTo(pts); ctxD.stroke(); ctxD.restore();
-    pts.forEach(pt=>{
+    ctxD.stroke();
+    ctxD.restore();
+    // --- Fin modificación ---
+
+    // Dibuja los puntos
+    compases.forEach(c=>{
+        let x = c.x;
+        let y = top+(G-bot-top)*(1-(c.valor-minC)/(maxC-minC||1));
         ctxD.fillStyle="#FFD700"; ctxD.beginPath();
-        ctxD.arc(pt[0],pt[1],4,0,2*Math.PI); ctxD.fill();
+        ctxD.arc(x,y,4,0,2*Math.PI); ctxD.fill();
         ctxD.strokeStyle="#FFC107"; ctxD.lineWidth=2;
         ctxD.beginPath();
-        ctxD.arc(pt[0],pt[1],4,0,2*Math.PI);
+        ctxD.arc(x,y,4,0,2*Math.PI);
         ctxD.stroke();
     });
     // ejes valores
@@ -444,6 +515,7 @@ function drawDurCompasGraph(){
     ctxD.fillText(maxC.toFixed(2),42,top+6);
     ctxD.fillText(minC.toFixed(2),42,H-bot+9);
 }
+
 
 
 function syncScroll(pos){
@@ -464,9 +536,11 @@ function scheduleDrawWave(){ requestAnimationFrame(drawWaveform);}
 function updateMarkersInfo(){
     markersCount.textContent = markers.length;
     let html="";
-    markers.forEach((m,i)=>{
+    // Nuevo: La última marca arriba
+    for(let i=markers.length-1; i>=0; i--){
+        let m = markers[i];
         html += `<div class="marker-item">#${i+1}: ${m.time.toFixed(3)}s — ${m.bpm?m.bpm.toFixed(2)+' BPM':'N/A'}</div>`;
-    });
+    }
     markerList.innerHTML = html || '<span style="color:#888">No hay marcas aún</span>';
 }
 function calcBPM(){
@@ -477,7 +551,24 @@ function calcBPM(){
     if(markers.length) markers[0].bpm = markers.length>1?markers[1].bpm:null;
     let bpmArr = markers.map(m=>m.bpm).filter(x=>x!=null);
     avgBpmLab.textContent = bpmArr.length? (bpmArr.reduce((a,b,)=>a+b,0)/bpmArr.length).toFixed(1) : '--';
+    updateBpmPanel();
 }
+function updateBpmPanel(){
+    // Mostramos bpm activo según contexto de reproducción o última marca
+    let t = playing ? currentTime : pauseOffset;
+    let bpmMostrar = '--';
+    if (markers.length >= 2) {
+        // Buscar la marca más cercana hacia la izquierda respecto a t
+        let idx = -1;
+        for (let i = 1; i < markers.length; i++) {
+            if (markers[i].time > t) { idx = i - 1; break; }
+        }
+        if (idx === -1 && t >= markers[markers.length - 1].time) idx = markers.length - 1;
+        if (idx > 0) bpmMostrar = markers[idx].bpm ? markers[idx].bpm.toFixed(2) : '--';
+    }
+    actualBpmVal.textContent = bpmMostrar;
+}
+
 function addMarker(rawtime){
     saveUndo();
     let time = rawtime + Number(inputLag);
@@ -594,7 +685,7 @@ function playMetronomeClick(){
     }
 }
 function animate(){
-    drawWaveform();drawBpmGraph();drawDurCompasGraph();updateTimeLabel();
+    drawWaveform();drawBpmGraph();drawDurCompasGraph();updateTimeLabel();updateBpmPanel();
     if(playing && markers.length){
         let tNow = currentTime, tBefore = metronomeClickTime;
         if (tNow<tBefore){ scheduledNextClickIdx=0;tBefore=0;}
@@ -680,7 +771,19 @@ exportBtn.onclick=()=>{
     a.click();
     document.body.removeChild(a);
 };
+
+// ------- Comportamiento Tap Tempo ---------
+
+tapTempoBtn.onclick = ()=>{
+    if(!audioBuffer || duration <= 0) return;
+    // Toma el tiempo actual del audio si está reproduciendo, si no, en pauseOffset
+    let t = playing ? currentTime : pauseOffset;
+    addMarker(t);
+};
+// ------------------------------------------
+
 reset();
+
 </script>
 </body>
 </html>
