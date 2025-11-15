@@ -759,18 +759,23 @@ exportBtn.onclick=()=>{
         alert("No hay marcas para exportar.");
         return;
     }
-    let csv='Tiempo (segundos),BPM\n';
-    markers.forEach(m=>{ 
-        csv+=`${m.time.toFixed(3)},${m.bpm?m.bpm.toFixed(2):'N/A'}\n`; 
+
+    let csv = 'Marca,Compás,Tiempo (segundos),BPM\n';
+    markers.forEach((m, i) => {
+        // Cálculo del compás al que pertenece cada marca
+        let compasNum = Math.floor(i / cifraCompas) + 1;
+        csv += `${i + 1},${compasNum},${m.time.toFixed(3)},${m.bpm ? m.bpm.toFixed(2) : 'N/A'}\n`;
     });
-    let blob = new Blob([csv],{type:'text/csv'});
+
+    let blob = new Blob([csv], { type: 'text/csv' });
     let a = document.createElement('a');
-    a.href=URL.createObjectURL(blob);
-    a.download='tempo_map.csv';
+    a.href = URL.createObjectURL(blob);
+    a.download = 'tempo_map.csv';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
 };
+
 
 // ------- Comportamiento Tap Tempo ---------
 
