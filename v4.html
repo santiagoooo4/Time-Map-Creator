@@ -175,7 +175,11 @@
             <span>Duración: <b id="duration">0.00</b>s</span>
             <span>Marcas: <b id="countMarkers">0</b></span>
             <span>BPM Prom: <b id="avgBpm">--</b></span>
+            <span>Duración orig. audio: <b id="origDuration">--</b>s</span>
+            <span>Recorte inicio: <b id="fragStart">--</b>s</span>
+            <span>Recorte fin: <b id="fragEnd">--</b>s</span>
         </div>
+
         <b style="display:block; margin-bottom:8px;">Marcas:</b>
         <div class="marker-list" id="markerList"></div>
     </div>
@@ -218,7 +222,13 @@ const fileInput = document.getElementById('file'),
     cifraCompasInput = document.getElementById('cifraCompas'),
     tapTempoBtn = document.getElementById('tapTempoBtn'),
     bpmPanel = document.getElementById('bpmPanel'),
-    actualBpmVal = document.getElementById('actualBpmVal');
+    actualBpmVal = document.getElementById('actualBpmVal'),
+    origDuration = document.getElementById('origDuration'),
+    fragStart = document.getElementById('fragStart'),
+    fragEnd = document.getElementById('fragEnd'),
+    importMultiCsv = document.getElementById('importMultiCsv');
+    const importMultiBtn = document.getElementById('importMultiBtn');
+
 
 
 metroVolCtrl.value = 0.2;
@@ -310,7 +320,13 @@ function finishLoadingAudioBuffer(){
     enable(true); exportBtn.disabled = false;
     processWave().then(()=>{setWaveWidth();drawWaveform();drawBpmGraph(); drawDurCompasGraph();});
     syncScroll(0); updateBpmPanel();
+
+    // ACTUALIZA PANEL DE FRAGMENTO Y DURACIÓN ORIGINAL
+    origDuration.textContent = origAudioBuffer ? origAudioBuffer.duration.toFixed(2) : '--';
+    fragStart.textContent = audioFragment?.t0 !== undefined ? audioFragment.t0.toFixed(3) : '--';
+    fragEnd.textContent = audioFragment?.t1 !== undefined ? audioFragment.t1.toFixed(3) : '--';
 }
+
 function showFragmentDialog(audioDur){
     fragmentDialogRoot.innerHTML = '';
     let backdrop = document.createElement('div');
@@ -761,16 +777,19 @@ exportBtn.onclick=()=>{
         alert("No hay marcas para exportar.");
         return;
     }
-    // Extrae información
+
+    // Obtener nombre del archivo de audio
     let audioFileName = fileInput.files[0]?.name ?? '';
-    let fragIni = audioFragment.t0?.toFixed(3) ?? '0.000';
-    let fragFin = audioFragment.t1?.toFixed(3) ?? '0.000';
+
+    // Aquí tomamos SIEMPRE los valores actuales del fragmento que se usan para reproducir
+    let fragIni = audioFragment?.t0 !== undefined ? audioFragment.t0 : 0;
+    let fragFin = audioFragment?.t1 !== undefined ? audioFragment.t1 : duration;
 
     // Cabecera extendida
     let csv =
         `AudioFile,${audioFileName}\n` +
-        `FragmentStart,${fragIni}\n` +
-        `FragmentEnd,${fragFin}\n` +
+        `FragmentStart,${fragIni.toFixed(3)}\n` +
+        `FragmentEnd,${fragFin.toFixed(3)}\n` +
         `Marca,Compás,Tiempo (segundos),BPM\n`;
 
     markers.forEach((m, i) => {
