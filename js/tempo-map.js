@@ -1,0 +1,847 @@
+const ctx = new(window.AudioContext||window.webkitAudioContext)();
+
+
+let audioBuffer = null, musicSource = null, playing = false, currentTime = 0, playStartTimestamp = 0, pauseOffset = 0, scheduledAnim = null;
+let markers = [], waveformData = [], duration = 0;
+let currentTool = 'normal', isDragging = false, draggedMarker=null, zoom=1, scrollOffset=0;
+let clickBuffer = null, metronomeOn = false, metroClickVol=0.2, mainVol=1;
+let scheduledNextClickIdx = 0, metronomeClickTime = 0;
+let undoStack=[], redoStack=[];
+let inputLag = 0;
+let cifraCompas = 4;
+let audioFragment = { useFull: true, t0: 0, t1: 0 };
+let origAudioBuffer = null;
+
+
+const fileInput = document.getElementById('file'),
+    clickInput = document.getElementById('clickFile'),
+    playBtn = document.getElementById('play'),
+    pauseBtn = document.getElementById('pause'),
+    stopBtn = document.getElementById('stop'),
+    tools = {normal:document.getElementById('normal'),pencil:document.getElementById('pencil'),eraser:document.getElementById('eraser')},
+    zoomVal = document.getElementById('zoomval'),
+    zoIn = document.getElementById('zoomin'), zoOut = document.getElementById('zoomout'),
+    wave = document.getElementById('waveform'), waveCont = document.getElementById('waveformCont'),
+    bpmGraph = document.getElementById('bpmGraph'), bpmGraphCont = document.getElementById('bpmGraphCont'),
+    durCompasGraph = document.getElementById('durCompasGraph'), durCompasGraphCont = document.getElementById('durCompasGraphCont'),
+    zoomControls = document.getElementById('zoomControls'),
+    timeLabel = document.getElementById('currentTime'), durLabel = document.getElementById('duration'),
+    markerList = document.getElementById('markerList'), markersCount = document.getElementById('countMarkers'),
+    avgBpmLab = document.getElementById('avgBpm'), metroBtn = document.getElementById('metroBtn'),
+    mainVolCtrl = document.getElementById('mainVol'), metroVolCtrl = document.getElementById('metroVol'),
+    exportBtn = document.getElementById('export'), undoBtn=document.getElementById('undoBtn'), redoBtn=document.getElementById('redoBtn'),
+    lagInput = document.getElementById('lagInput'), fragmentDialogRoot = document.getElementById('fragmentDialogRoot'),
+    cifraCompasInput = document.getElementById('cifraCompas'),
+    tapTempoBtn = document.getElementById('tapTempoBtn'),
+    bpmPanel = document.getElementById('bpmPanel'),
+    actualBpmVal = document.getElementById('actualBpmVal'),
+    origDuration = document.getElementById('origDuration'),
+    fragStart = document.getElementById('fragStart'),
+    fragEnd = document.getElementById('fragEnd'),
+    importMultiCsv = document.getElementById('importMultiCsv'),
+    importMultiBtn = document.getElementById('importMultiBtn'),
+    multiImportCsv = document.getElementById('multiImportCsv'),
+    clearBtn = document.getElementById('clearBtn'),
+    exportAvgBtn = document.getElementById('exportAvgBtn');
+
+
+
+
+metroVolCtrl.value = 0.2;
+cifraCompasInput.oninput = ()=>{
+    cifraCompas = Math.max(1,parseInt(cifraCompasInput.value)||4);
+    drawWaveform(); drawBpmGraph(); drawDurCompasGraph();
+};
+
+
+function enable(val){ [playBtn,pauseBtn,stopBtn,exportBtn].forEach(e=>e.disabled=!val);}
+
+
+function saveUndo() {
+    undoStack.push(JSON.stringify(markers));
+    undoBtn.disabled=undoStack.length<1; redoBtn.disabled=redoStack.length<1; 
+    if(undoStack.length>100) undoStack.shift();
+}
+function doUndo() {
+    if (!undoStack.length) return;
+    redoStack.push(JSON.stringify(markers));
+    markers = JSON.parse(undoStack.pop());
+    calcBPM(); updateMarkersInfo(); scheduleDrawWave(); drawBpmGraph(); drawDurCompasGraph();
+    undoBtn.disabled=undoStack.length<1; redoBtn.disabled=redoStack.length<1;
+}
+function doRedo() {
+    if (!redoStack.length) return;
+    undoStack.push(JSON.stringify(markers));
+    markers = JSON.parse(redoStack.pop());
+    calcBPM(); updateMarkersInfo(); scheduleDrawWave(); drawBpmGraph(); drawDurCompasGraph();
+    undoBtn.disabled=undoStack.length<1; redoBtn.disabled=redoStack.length<1;
+}
+undoBtn.onclick = doUndo; redoBtn.onclick = doRedo;
+
+clearBtn.onclick = () => {
+    if (!markers.length) return;
+    // Guardar estado previo para undo
+    saveUndo();
+    markers = [];
+    calcBPM();
+    updateMarkersInfo();
+    scheduleDrawWave();
+    drawBpmGraph();
+    drawDurCompasGraph();
+    redoStack = [];
+    redoBtn.disabled = true;
+};
+
+document.addEventListener('keydown', function(e){
+    if((e.ctrlKey||e.metaKey) && e.key==='z' && !e.shiftKey) {doUndo();e.preventDefault();}
+    if(((e.ctrlKey||e.metaKey)&&(e.key==='y'||(e.key==='z'&&e.shiftKey)))){doRedo();e.preventDefault();}
+});
+
+
+function reset(){
+    if(musicSource){ try{ musicSource.stop(); }catch{} musicSource=null; }
+    audioBuffer = null; waveformData = []; markers = [];
+    playing = false; currentTime = 0; pauseOffset = 0; enable(false);
+    durLabel.textContent='0.00'; timeLabel.textContent='0.00'; undoStack=[]; redoStack=[];
+    setWaveWidth();drawWaveform();drawBpmGraph(); drawDurCompasGraph(); undoBtn.disabled=redoBtn.disabled=true;
+    syncScroll(0); updateBpmPanel();
+}
+function setWaveWidth(){
+    const containerWidth = waveCont.clientWidth || 1200;
+    if(!audioBuffer){ wave.width = containerWidth; wave.height = 200; return; }
+    let pxPerSec = zoom*containerWidth/duration;
+    wave.width = Math.max(containerWidth, Math.ceil(duration*pxPerSec));
+    wave.height = 200;
+    bpmGraph.width = wave.width; bpmGraph.height = 140;
+    durCompasGraph.width = wave.width; durCompasGraph.height = 60;
+}
+fileInput.onchange = async e=>{
+    reset();
+    let file = fileInput.files[0]; if (!file) return;
+    const arrayBuffer = await file.arrayBuffer();
+    origAudioBuffer = await ctx.decodeAudioData(arrayBuffer);
+    showFragmentDialog(origAudioBuffer.duration);
+};
+function loadBufferFragment(buffer, t0, t1) {
+    let sampleRate = buffer.sampleRate;
+    let l = Math.floor((t1-t0)*sampleRate);
+    let offset = Math.floor(t0*sampleRate);
+    let c = buffer.numberOfChannels;
+    let newBuffer = ctx.createBuffer(c, l, sampleRate);
+    for(let ch=0; ch<c; ch++) {
+        let from = buffer.getChannelData(ch);
+        let to = newBuffer.getChannelData(ch);
+        for(let i=0;i<l;i++) to[i] = from[offset+i] || 0;
+    }
+    return newBuffer;
+}
+function finishLoadingAudioBuffer(){
+    if(audioFragment.useFull){
+        audioBuffer = origAudioBuffer;
+        audioFragment.t0 = 0;
+        audioFragment.t1 = origAudioBuffer.duration;
+    } else {
+        audioBuffer = loadBufferFragment(origAudioBuffer, audioFragment.t0, audioFragment.t1);
+    }
+    duration = audioBuffer.duration;
+    durLabel.textContent = duration.toFixed(2);
+    currentTime = 0; pauseOffset = 0;
+    enable(true); exportBtn.disabled = false;
+    processWave().then(()=>{setWaveWidth();drawWaveform();drawBpmGraph(); drawDurCompasGraph();});
+    syncScroll(0); updateBpmPanel();
+
+    // ACTUALIZA PANEL DE FRAGMENTO Y DURACIÓN ORIGINAL
+    origDuration.textContent = origAudioBuffer ? origAudioBuffer.duration.toFixed(2) : '--';
+    fragStart.textContent = audioFragment?.t0 !== undefined ? audioFragment.t0.toFixed(3) : '--';
+    fragEnd.textContent = audioFragment?.t1 !== undefined ? audioFragment.t1.toFixed(3) : '--';
+}
+
+function showFragmentDialog(audioDur){
+    fragmentDialogRoot.innerHTML = '';
+    let backdrop = document.createElement('div');
+    backdrop.className = 'fragment-dialog-backdrop';
+    let dialog = document.createElement('div');
+    dialog.className = 'fragment-dialog';
+    dialog.innerHTML = `
+    <h3>Fragmento del audio 🎚️</h3>
+    <div class="toggle-row">
+        <input type="checkbox" id="toggleWholeAudio" checked>
+        <label for="toggleWholeAudio" style="color:#42d262;cursor:pointer;"><b>Usar TODO el audio</b></label>
+    </div>
+    <label>Inicio (seg): <input type="number" step="0.01" min="0" max="${(audioDur-0.1).toFixed(2)}" id="fragmentStart" value="0.00" disabled></label>
+    <label>Final (seg): <input type="number" step="0.01" min="0.1" max="${audioDur.toFixed(2)}" id="fragmentEnd" value="${audioDur.toFixed(2)}" disabled></label>
+    <div class="fragment-dialog-buttons">
+        <button id="fragmentOk">Cargar</button>
+    </div>
+    `;
+    backdrop.appendChild(dialog);
+    fragmentDialogRoot.appendChild(backdrop);
+    let toggle = dialog.querySelector('#toggleWholeAudio');
+    let start = dialog.querySelector('#fragmentStart');
+    let end = dialog.querySelector('#fragmentEnd');
+    toggle.onchange = ()=>{
+        let dis = toggle.checked;
+        start.disabled = end.disabled = dis;
+    }
+    dialog.querySelector('#fragmentOk').onclick = ()=>{
+        let useFull = toggle.checked;
+        if(!useFull){
+            let t0 = parseFloat(start.value)||0, t1 = parseFloat(end.value)||audioDur;
+            if(t1<=t0+0.05){ alert("El final debe ser mayor al inicio."); return; }
+            if(t0<0 || t1>audioDur){ alert("Rango fuera del audio."); return; }
+            audioFragment = { useFull:false, t0, t1 };
+        }else{
+            audioFragment = { useFull:true, t0:0, t1:audioDur };
+        }
+        fragmentDialogRoot.innerHTML = '';
+        finishLoadingAudioBuffer();
+    }
+};
+clickInput.onchange = async e=>{
+    let file = clickInput.files[0];
+    if(!file){ clickBuffer=null; return;}
+    const ab = await file.arrayBuffer();
+    clickBuffer = await ctx.decodeAudioData(ab);
+};
+async function processWave(){
+    if(!audioBuffer) return;
+    const raw = audioBuffer.getChannelData(0);
+    setWaveWidth();
+    let N = wave.width, step = Math.max(1, Math.floor(raw.length / N)), peak=0, vals=[];
+    for(let i=0;i<N;i++){
+        let sum=0, count=0;
+        for(let j=0;j<step;j++) {
+            let idx = i*step+j;
+            if(idx < raw.length){
+                let v=raw[idx];
+                sum+=v*v;
+                count++;
+            }
+        }
+        let rms = count>0 ? Math.sqrt(sum/count) : 0;
+        if(rms>peak) peak=rms;
+        vals.push(rms);
+    }
+    waveformData = peak ? vals.map(v=>v/peak) : vals;
+}
+function drawWaveform(){
+    let ctx2 = wave.getContext('2d'),N=wave.width,H=wave.height,M=H/2;
+    ctx2.clearRect(0,0,N,H);
+    ctx2.fillStyle="#101112"; ctx2.fillRect(0,0,N,H);
+    if(!waveformData.length){return;}
+    ctx2.strokeStyle="#666"; ctx2.beginPath(); ctx2.moveTo(0,M); ctx2.lineTo(N,M); ctx2.stroke();
+    ctx2.save(); ctx2.strokeStyle="#42d262"; ctx2.beginPath();
+    for(let i=0;i<N;i++){
+        let amp=waveformData[i];
+        let y1 = M - (amp*M*0.95);
+        let y2 = M + (amp*M*0.95);
+        ctx2.moveTo(i,y1); ctx2.lineTo(i,y2);
+    }
+    ctx2.stroke(); ctx2.restore();
+    markers.forEach((mk,idx)=>{
+        const x= mk.time/duration*N;
+        ctx2.save();
+        let color = "#00bcd4", alpha=1.0;
+        if((idx)%cifraCompas!==0) alpha=0.52;
+        if(mk===draggedMarker){ color="#FFFF00"; alpha=1.0; }
+        ctx2.globalAlpha=alpha;
+        ctx2.strokeStyle= color;
+        ctx2.beginPath(); ctx2.moveTo(x,0); ctx2.lineTo(x,H); ctx2.stroke(); ctx2.restore();
+        ctx2.save();
+        ctx2.globalAlpha=alpha;
+        ctx2.fillStyle= color;
+        ctx2.beginPath(); ctx2.arc(x,14,6,0,2*Math.PI); ctx2.fill();
+        ctx2.restore();
+    });
+    ctx2.save();
+    ctx2.globalAlpha=1.0;
+    ctx2.strokeStyle="#ff3243"; ctx2.beginPath();
+    let px = currentTime/duration*N; ctx2.moveTo(px,0); ctx2.lineTo(px,H); ctx2.stroke(); ctx2.restore();
+}
+function drawBpmGraph(){
+    const ctxG = bpmGraph.getContext('2d');
+    const W = bpmGraph.width, H = bpmGraph.height;
+    ctxG.clearRect(0,0,W,H);
+    ctxG.fillStyle="#101112"; ctxG.fillRect(0,0,W,H);
+    if(markers.length<2) {
+        ctxG.fillStyle="#666"; ctxG.font="16px Arial";
+        ctxG.fillText("Añade al menos dos marcas para ver la variación de BPM",18,38); return;
+    }
+    let bpms = markers.map(m=>m.bpm||0).filter(x=>x);
+    let minBpm = Math.floor(Math.min(...bpms)*0.92), maxBpm = Math.ceil(Math.max(...bpms)*1.08);
+    let G = H, left=44, bot=18, top=18;
+    ctxG.strokeStyle="#2196F3"; ctxG.beginPath();
+    ctxG.moveTo(left,top); ctxG.lineTo(left,G-bot); ctxG.lineTo(W-12,G-bot); ctxG.stroke();
+    ctxG.fillStyle="#aaa"; ctxG.font="12px Arial";
+    for(let y=top;y<G-bot;y+=28){
+        let bpmVal = maxBpm-(y-top)/(G-bot-top)*(maxBpm-minBpm);
+        ctxG.fillText(bpmVal.toFixed(0),3,y+4);
+        ctxG.strokeStyle="#333"; ctxG.beginPath();
+        ctxG.moveTo(left-2,y); ctxG.lineTo(W-12,y); ctxG.stroke();
+    }
+    ctxG.save(); ctxG.strokeStyle="#29b6f6"; ctxG.lineWidth=3; ctxG.beginPath();
+    let pts = [];
+    // Corrección: Cada punto debe estar alineado con el momento anterior (markers[i-1])
+    for(let i=1;i<markers.length;i++){
+        // Tiempo del marcador anterior contra el bpm calculado
+        let x=markers[i-1].time/duration*(W-1);
+        let y=top+(G-bot-top)*(1-(markers[i].bpm-minBpm)/(maxBpm-minBpm)); 
+        pts.push([x,y]);
+    }
+    function splineTo(points){
+        if(points.length<2) return;
+        ctxG.moveTo(points[0][0],points[0][1]);
+        for(let i=0;i<points.length-1;i++){
+            let p0=points[i-1]||points[i],p1=points[i],p2=points[i+1],p3=points[i+2]||points[i+1];
+            for(let t=0;t<=1;t+=0.08){
+                let tt = t*t, ttt = tt*t;
+                let x = 0.5*((2*p1[0]) + (-p0[0]+p2[0])*t + (2*p0[0]-5*p1[0]+4*p2[0]-p3[0])*tt + (-p0[0]+3*p1[0]-3*p2[0]+p3[0])*ttt);
+                let y = 0.5*((2*p1[1]) + (-p0[1]+p2[1])*t + (2*p0[1]-5*p1[1]+4*p2[1]-p3[1])*tt + (-p0[1]+3*p1[1]-3*p2[1]+p3[1])*ttt);
+                ctxG.lineTo(x,y);
+            }
+        }
+    }
+    splineTo(pts); ctxG.stroke(); ctxG.restore();
+    pts.forEach(pt=>{
+        ctxG.fillStyle="#fff"; ctxG.beginPath();
+        ctxG.arc(pt[0],pt[1],4,0,2*Math.PI); ctxG.fill();
+        ctxG.strokeStyle="#29b6f6"; ctxG.lineWidth=2;
+        ctxG.beginPath();
+        ctxG.arc(pt[0],pt[1],4,0,2*Math.PI);
+        ctxG.stroke();
+    });
+}
+function drawDurCompasGraph(){
+    const ctxD = durCompasGraph.getContext('2d');
+    const W = durCompasGraph.width, H = durCompasGraph.height;
+    ctxD.clearRect(0,0,W,H);
+    ctxD.fillStyle="#101112"; ctxD.fillRect(0,0,W,H);
+    if(markers.length<cifraCompas+1){
+        ctxD.fillStyle="#666"; ctxD.font="13px Arial"; ctxD.fillText("Marca al menos "+(cifraCompas+1)+" tiempos para ver la duración de compás",14,32); return;
+    }
+    let compases=[];
+    for(let i=cifraCompas;i<markers.length;i+=cifraCompas){
+        let tIni=markers[i-cifraCompas].time, tFin=markers[i].time;
+        let compIdx = Math.floor(i/cifraCompas);
+        compases.push({ valor: tFin-tIni, idx: compIdx, x: tIni/duration*(W-1) });
+    }
+    let minC = Math.min(...compases.map(c=>c.valor)), maxC = Math.max(...compases.map(c=>c.valor));
+    let G = H, left=44, bot=14, top=14;
+
+    // --- Modificación: unir los puntos con líneas rectas ---
+    ctxD.save();
+    ctxD.strokeStyle = "#FFC107";
+    ctxD.lineWidth = 3;
+    ctxD.beginPath();
+    if (compases.length > 0) {
+        let y0 = top+(G-bot-top)*(1-(compases[0].valor-minC)/(maxC-minC||1));
+        ctxD.moveTo(compases[0].x, y0);
+        for (let i=1; i<compases.length; i++) {
+            // Línea recta al siguiente punto
+            let y = top+(G-bot-top)*(1-(compases[i].valor-minC)/(maxC-minC||1));
+            ctxD.lineTo(compases[i].x, y);
+        }
+    }
+    ctxD.stroke();
+    ctxD.restore();
+    // --- Fin modificación ---
+
+    // Dibuja los puntos
+    compases.forEach(c=>{
+        let x = c.x;
+        let y = top+(G-bot-top)*(1-(c.valor-minC)/(maxC-minC||1));
+        ctxD.fillStyle="#FFD700"; ctxD.beginPath();
+        ctxD.arc(x,y,4,0,2*Math.PI); ctxD.fill();
+        ctxD.strokeStyle="#FFC107"; ctxD.lineWidth=2;
+        ctxD.beginPath();
+        ctxD.arc(x,y,4,0,2*Math.PI);
+        ctxD.stroke();
+    });
+    // ejes valores
+    ctxD.fillStyle="#FFD700"; ctxD.font="12px Arial"; ctxD.textAlign="right";
+    ctxD.fillText(maxC.toFixed(2),42,top+6);
+    ctxD.fillText(minC.toFixed(2),42,H-bot+9);
+}
+
+
+
+function syncScroll(pos){
+    waveCont.scrollLeft = pos;
+    bpmGraphCont.scrollLeft = pos;
+    durCompasGraphCont.scrollLeft = pos;
+}
+waveCont.addEventListener('scroll', ()=>{ 
+    syncScroll(waveCont.scrollLeft);
+});
+bpmGraphCont.addEventListener('scroll', ()=>{ 
+    syncScroll(bpmGraphCont.scrollLeft);
+});
+durCompasGraphCont.addEventListener('scroll', ()=>{ 
+    syncScroll(durCompasGraphCont.scrollLeft);
+});
+function scheduleDrawWave(){ requestAnimationFrame(drawWaveform);}
+function updateMarkersInfo(){
+    markersCount.textContent = markers.length;
+    let html="";
+    // Nuevo: La última marca arriba
+    for(let i=markers.length-1; i>=0; i--){
+        let m = markers[i];
+        html += `<div class="marker-item">#${i+1}: ${m.time.toFixed(3)}s — ${m.bpm?m.bpm.toFixed(2)+' BPM':'N/A'}</div>`;
+    }
+    markerList.innerHTML = html || '<span style="color:#888">No hay marcas aún</span>';
+}
+function calcBPM(){
+    for(let i=1;i<markers.length;i++){
+        let t = markers[i].time-markers[i-1].time;
+        let bpm = 60/t;markers[i].bpm = bpm;
+    }
+    if(markers.length) markers[0].bpm = markers.length>1?markers[1].bpm:null;
+    let bpmArr = markers.map(m=>m.bpm).filter(x=>x!=null);
+    avgBpmLab.textContent = bpmArr.length? (bpmArr.reduce((a,b,)=>a+b,0)/bpmArr.length).toFixed(1) : '--';
+    updateBpmPanel();
+}
+function updateBpmPanel(){
+    // Mostramos bpm activo según contexto de reproducción o última marca
+    let t = playing ? currentTime : pauseOffset;
+    let bpmMostrar = '--';
+    if (markers.length >= 2) {
+        // Buscar la marca más cercana hacia la izquierda respecto a t
+        let idx = -1;
+        for (let i = 1; i < markers.length; i++) {
+            if (markers[i].time > t) { idx = i - 1; break; }
+        }
+        if (idx === -1 && t >= markers[markers.length - 1].time) idx = markers.length - 1;
+        if (idx > 0) bpmMostrar = markers[idx].bpm ? markers[idx].bpm.toFixed(2) : '--';
+    }
+    actualBpmVal.textContent = bpmMostrar;
+}
+
+function addMarker(rawtime){
+    saveUndo();
+    let time = rawtime + Number(inputLag);
+    time = Math.max(0.001,Math.min(time,duration-0.001));
+    markers.push({time,bpm:null});
+    markers.sort((a,b)=>a.time-b.time); 
+    calcBPM(); updateMarkersInfo(); scheduleDrawWave(); drawBpmGraph(); drawDurCompasGraph();
+    redoStack=[]; redoBtn.disabled=true;
+}
+function removeMarkerAt(x){
+    saveUndo();
+    const t = x/wave.width*duration;
+    for(let i=0;i<markers.length;i++){
+        if(Math.abs(markers[i].time-t)<0.20){
+            markers.splice(i,1); 
+            calcBPM(); updateMarkersInfo(); scheduleDrawWave(); drawBpmGraph(); drawDurCompasGraph();
+            break;
+        }
+    }
+    redoStack=[]; redoBtn.disabled=true;
+}
+function findMarkerAt(x){
+    const t = x/wave.width*duration;
+    for(let m of markers){ if(Math.abs(m.time-t)<0.20) return m; }
+    return null;
+}
+wave.addEventListener('mousedown', e=>{
+    const rect = wave.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const time = (x/wave.width)*duration;
+    if(currentTool==='normal'){
+        let m = findMarkerAt(x);
+        if(m){ saveUndo(); draggedMarker = m; isDragging = true; scheduleDrawWave(); drawBpmGraph(); drawDurCompasGraph(); }
+        else{
+            pauseOffset = Math.max(0, Math.min(time, duration-0.001));
+            currentTime = pauseOffset;
+            drawWaveform(); drawBpmGraph(); drawDurCompasGraph(); updateTimeLabel();
+        }
+    }else if(currentTool==='pencil'){ 
+        addMarker(time);
+    }else if(currentTool==='eraser'){ 
+        removeMarkerAt(x);
+    }
+});
+wave.addEventListener('mousemove',e=>{
+    if(isDragging && draggedMarker){
+        const rect = wave.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        let time = Math.max(0,Math.min((x/wave.width)*duration,duration));
+        draggedMarker.time = time;
+        markers.sort((a,b)=>a.time-b.time); 
+        calcBPM(); updateMarkersInfo(); scheduleDrawWave(); drawBpmGraph(); drawDurCompasGraph();
+    }
+});
+wave.addEventListener('mouseup',()=>{
+    isDragging=false;
+    if(draggedMarker){ draggedMarker=null; scheduleDrawWave(); drawBpmGraph(); drawDurCompasGraph(); }
+});
+wave.addEventListener('mouseleave',()=>{
+    isDragging=false;
+    if(draggedMarker){ draggedMarker=null; scheduleDrawWave(); drawBpmGraph(); drawDurCompasGraph(); }
+});
+Object.entries(tools).forEach(([tool,btn])=>{
+    btn.onclick=()=>{
+        currentTool = tool;
+        Object.values(tools).forEach(b=>b.classList.remove('active'));
+        btn.classList.add('active');
+    };
+});
+zoomVal.textContent = '1.0x';
+function updateZoomUi(val){ zoomVal.textContent = Number(val).toFixed(1)+'x'; }
+zoIn.onclick=()=>{
+    zoom = Math.min(50, parseFloat(zoom)+0.2);
+    updateZoomUi(zoom);
+    processWave().then(()=>{setWaveWidth();drawWaveform();drawBpmGraph(); drawDurCompasGraph();});
+};
+zoOut.onclick=()=>{
+    zoom = Math.max(1, parseFloat(zoom)-0.2);
+    updateZoomUi(zoom);
+    processWave().then(()=>{setWaveWidth();drawWaveform();drawBpmGraph(); drawDurCompasGraph();});
+};
+waveCont.addEventListener('wheel', (e) => {
+    if(e.ctrlKey) {
+        e.preventDefault();
+        let delta = e.deltaY > 0 ? -0.2 : 0.2;
+        zoom = Math.max(1,Math.min(50, parseFloat(zoom)+delta));
+        updateZoomUi(zoom);
+        processWave().then(()=>{setWaveWidth();drawWaveform();drawBpmGraph(); drawDurCompasGraph();});
+    }
+}, {passive: false});    
+mainVolCtrl.oninput=()=>{mainVol=parseFloat(mainVolCtrl.value);}
+metroVolCtrl.oninput=()=>{metroClickVol=parseFloat(metroVolCtrl.value);}
+lagInput.oninput=()=>{inputLag=Number(lagInput.value);}
+metroBtn.onclick = function(){
+    metronomeOn = !metronomeOn;
+    metroBtn.style.background = metronomeOn ? "#46f" : "#333";
+    metroBtn.innerHTML = metronomeOn ? "🔔 Metrónomo" : "🔈 Metrónomo";
+};
+function updateTimeLabel(){ timeLabel.textContent = currentTime.toFixed(2);}
+function playMetronomeClick(){
+    if(clickBuffer){
+        const cs = ctx.createBufferSource();
+        cs.buffer = clickBuffer;
+        const gain = ctx.createGain();
+        gain.gain.value = metroClickVol;
+        cs.connect(gain).connect(ctx.destination);
+        cs.start();
+    } else {
+        const osc=ctx.createOscillator(),g=ctx.createGain();
+        osc.type='square'; osc.frequency.value=1600; g.gain.value=metroClickVol;
+        osc.connect(g).connect(ctx.destination);
+        osc.start(); osc.stop(ctx.currentTime+0.035);
+        g.gain.linearRampToValueAtTime(0.001,ctx.currentTime+0.035);
+    }
+}
+function animate(){
+    drawWaveform();drawBpmGraph();drawDurCompasGraph();updateTimeLabel();updateBpmPanel();
+    if(playing && markers.length){
+        let tNow = currentTime, tBefore = metronomeClickTime;
+        if (tNow<tBefore){ scheduledNextClickIdx=0;tBefore=0;}
+        while(scheduledNextClickIdx<markers.length && markers[scheduledNextClickIdx].time<=tNow){
+            if(markers[scheduledNextClickIdx].time>tBefore && metronomeOn) playMetronomeClick();
+            scheduledNextClickIdx++;
+        }
+        metronomeClickTime = tNow;
+    }
+    if(playing) scheduledAnim = requestAnimationFrame(step);
+}
+function step(){
+    let now = ctx.currentTime;
+    if(playStartTimestamp===0) playStartTimestamp = now;
+    currentTime = pauseOffset + (now-playStartTimestamp);
+    if(currentTime>=duration){ stopMusic(); return;}
+    if(musicSource) musicSource.playbackRate.value=1;
+    if(musicSource) musicSource.gain.gain.value = mainVol;
+    animate();
+}
+function stopMusic(){
+    playing=false; pauseOffset=0; currentTime=0;
+    if(musicSource) try{ musicSource.stop(); }catch{} musicSource=null;
+    cancelAnimationFrame(scheduledAnim);drawWaveform();drawBpmGraph();drawDurCompasGraph();updateTimeLabel();
+}
+function pauseMusic(){
+    playing=false;if(musicSource) try{ musicSource.stop(); }catch{} musicSource=null;
+    pauseOffset = currentTime;
+    cancelAnimationFrame(scheduledAnim);drawWaveform();drawBpmGraph();drawDurCompasGraph();updateTimeLabel();
+}
+function seekMusic(t){ currentTime=t;pauseOffset=currentTime;if(playing){ startMusic();}}
+function startMusic(){
+    if(!audioBuffer) return;
+    if(musicSource) try{ musicSource.stop(); }catch{} musicSource=null;
+    musicSource = ctx.createBufferSource();
+    musicSource.buffer = audioBuffer;
+    const gainNode = ctx.createGain();
+    gainNode.gain.value=mainVol;
+    musicSource.connect(gainNode).connect(ctx.destination);
+    scheduledNextClickIdx=0; metronomeClickTime=currentTime; playStartTimestamp=ctx.currentTime;
+    musicSource.start(0,currentTime);
+    musicSource.onended = stopMusic;
+    playing = true; scheduledAnim = requestAnimationFrame(step); musicSource.gain = gainNode;
+}
+playBtn.onclick=()=>{if(!audioBuffer) return;if(!playing){ startMusic(); }};
+pauseBtn.onclick=()=>{pauseMusic();};
+stopBtn.onclick=()=>{stopMusic();};
+document.addEventListener('keydown', e=>{
+    if(e.code==='Space' && !e.repeat && !e.ctrlKey && !e.altKey){
+        e.preventDefault(); 
+        if(!playing) startMusic();
+        else pauseMusic();
+    }
+    if((e.code==='KeyM' || e.key==='m') && !e.ctrlKey && !e.altKey && playing){
+        e.preventDefault(); 
+        addMarker(currentTime);
+    }
+    if(e.code==='ArrowLeft'){
+        e.preventDefault();
+        seekMusic(Math.max(0, currentTime-3));
+        drawWaveform(); drawBpmGraph(); drawDurCompasGraph();updateTimeLabel();
+    }
+    if(e.code==='ArrowRight'){
+        e.preventDefault();
+        seekMusic(Math.min(duration, currentTime+3));
+        drawWaveform(); drawBpmGraph(); drawDurCompasGraph();updateTimeLabel();
+    }
+});
+exportBtn.onclick=()=>{
+    if(!markers.length){
+        alert("No hay marcas para exportar.");
+        return;
+    }
+
+    // Obtener nombre del archivo de audio
+    let audioFileName = fileInput.files[0]?.name ?? '';
+
+    // Aquí tomamos SIEMPRE los valores actuales del fragmento que se usan para reproducir
+    let fragIni = audioFragment?.t0 !== undefined ? audioFragment.t0 : 0;
+    let fragFin = audioFragment?.t1 !== undefined ? audioFragment.t1 : duration;
+
+    // Cabecera extendida
+    let csv =
+        `AudioFile,${audioFileName}\n` +
+        `FragmentStart,${fragIni.toFixed(3)}\n` +
+        `FragmentEnd,${fragFin.toFixed(3)}\n` +
+        `Marca,Compás,Tiempo (segundos),BPM\n`;
+
+    markers.forEach((m, i) => {
+        let compasNum = Math.floor(i / cifraCompas) + 1;
+        csv += `${i + 1},${compasNum},${m.time.toFixed(3)},${m.bpm ? m.bpm.toFixed(2) : 'N/A'}\n`;
+    });
+
+    let blob = new Blob([csv], { type: 'text/csv' });
+    let a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'tempo_map.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+};
+
+importBtn.onclick = () => {
+    importCsv.click();
+};
+
+importCsv.onchange = (e) => {
+    const file = importCsv.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function(evt) {
+        let text = evt.target.result;
+        let lines = text.split(/\r?\n/);
+
+        // Lee cabecera extendida
+        let audioFile = '';
+        let fragIni = 0;
+        let fragFin = 0;
+        let dataIdx = 0;
+
+        lines.forEach((line, idx) => {
+            if (line.startsWith('AudioFile,')) {
+                audioFile = line.split(',')[1] ?? '';
+                dataIdx = idx + 1;
+            }
+            if (line.startsWith('FragmentStart,')) {
+                fragIni = parseFloat(line.split(',')[1] ?? '0');
+                dataIdx = idx + 1;
+            }
+            if (line.startsWith('FragmentEnd,')) {
+                fragFin = parseFloat(line.split(',')[1] ?? '0');
+                dataIdx = idx + 1;
+            }
+        });
+
+        // Busca la cabecera de columnas y las datos
+        let marcas = [];
+        for (let i = dataIdx; i < lines.length; i++) {
+            let line = lines[i].trim();
+            if (!line || line.startsWith('Marca')) continue;
+            let [numMarca, numCompas, tSeg, bpmVal] = line.split(',');
+
+            if (tSeg && !isNaN(parseFloat(tSeg))) {
+                marcas.push({ time: parseFloat(tSeg), bpm: bpmVal === 'N/A' ? null : parseFloat(bpmVal) });
+            }
+        }
+
+        if (marcas.length === 0) {
+            alert('No se encontraron marcas válidas en el archivo CSV.');
+            return;
+        }
+
+        // Aplica marcas y fragmento
+        audioFragment = {
+            useFull: (fragIni === 0 && fragFin === 0) ? true : false,
+            t0: fragIni,
+            t1: fragFin,
+        };
+        markers = marcas;
+        calcBPM();
+        updateMarkersInfo();
+        scheduleDrawWave();
+        drawBpmGraph();
+        drawDurCompasGraph();
+
+        alert(`Archivo importado!\nAudio: ${audioFile}\nFragmento: [${fragIni}s - ${fragFin}s]\nMarcas cargadas: ${marcas.length}`);
+    };
+    reader.readAsText(file);
+};
+
+let multiAvgData = null; // Almacena el resultado promediado temporalmente
+
+importMultiBtn.onclick = () => {
+    multiImportCsv.click();
+};
+
+multiImportCsv.onchange = (e) => {
+    const files = multiImportCsv.files;
+    if (!files || files.length < 2) {
+        alert('Selecciona al menos dos archivos CSV para promediar.');
+        return;
+    }
+    let parsed = [];
+    let info = null;
+    let fileReads = [];
+    for (let f = 0; f < files.length; f++) {
+        fileReads.push(new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = function(evt) {
+                let text = evt.target.result;
+                let lines = text.split(/\r?\n/);
+                let audioFile = '';
+                let fragIni = 0, fragFin = 0, marcas = [];
+                for (let l = 0; l < lines.length; l++) {
+                    let line = lines[l].trim();
+                    if (line.startsWith('AudioFile,')) audioFile = line.split(',')[1]?.trim();
+                    if (line.startsWith('FragmentStart,')) fragIni = parseFloat(line.split(',')[1]?.trim() ?? '0');
+                    if (line.startsWith('FragmentEnd,')) fragFin = parseFloat(line.split(',')[1]?.trim() ?? '0');
+                    if (line.startsWith('Marca')) continue; // Saltar cabecera
+                    if (line.match(/^\d+,/)) {
+                        let [numMarca, numCompas, tSeg, bpmVal] = line.split(',');
+                        marcas.push({
+                            numMarca: parseInt(numMarca),
+                            compasNum: parseInt(numCompas),
+                            time: parseFloat(tSeg),
+                            bpm: bpmVal === 'N/A' ? null : parseFloat(bpmVal),
+                        });
+                    }
+                }
+                resolve({ audioFile, fragIni, fragFin, marcas });
+            };
+            reader.onerror = reject;
+            reader.readAsText(files[f]);
+        }));
+    }
+
+    // Espera a leer todos los archivos
+    Promise.all(fileReads).then(arrays => {
+        // Validar todos los archivos tengan mismo audioFile, mismos fragmentos y misma cantidad de marcas
+        info = arrays[0];
+        let ok = arrays.every(a =>
+            a.audioFile === info.audioFile &&
+            Math.abs(a.fragIni - info.fragIni) < 0.001 &&
+            Math.abs(a.fragFin - info.fragFin) < 0.001 &&
+            a.marcas.length === info.marcas.length
+        );
+        if (!ok) {
+            alert('Todos los archivos deben tener el mismo audio, fragmento y cantidad de marcas.');
+            exportAvgBtn.disabled = true;
+            return;
+        }
+
+        // Promedio y estadísticas para cada marca
+        let marcaProms = [];
+        for (let i = 0; i < info.marcas.length; i++) {
+            let bpms = arrays.map(a => a.marcas[i].bpm);
+            let avg = bpms.reduce((a, b) => a + b, 0) / bpms.length;
+            let min = Math.min(...bpms);
+            let max = Math.max(...bpms);
+            let desvMax = Math.max(...bpms.map(b => Math.abs(b - avg)));
+            let desvMin = Math.min(...bpms.map(b => Math.abs(b - avg)));
+            let desvProm = bpms.map(b => Math.abs(b - avg)).reduce((a, b) => a + b, 0) / bpms.length;
+            marcaProms.push({
+                marca: info.marcas[i].numMarca,
+                compas: info.marcas[i].compasNum,
+                time: info.marcas[i].time,
+                avgBpm: avg,
+                minBpm: min,
+                maxBpm: max,
+                desvMax,
+                desvMin,
+                desvProm
+            });
+        }
+
+        // Estadísticas globales de desviación (máx, mín, promedio)
+        let deviations = marcaProms.map(m => m.desvProm);
+        let stats = {
+            marcaCount: info.marcas.length,
+            audioFile: info.audioFile,
+            fragIni: info.fragIni,
+            fragFin: info.fragFin,
+            desvMin: Math.min(...deviations),
+            desvMax: Math.max(...deviations),
+            desvAvg: deviations.reduce((a, b) => a + b, 0) / deviations.length
+        };
+
+        // Habilita exportación
+        exportAvgBtn.disabled = false;
+        multiAvgData = { marcaProms, stats };
+        alert(`¡Promedio listo! Exporta el resultado con "Exportar Promedio"`);
+    });
+};
+
+// EXPORTA el promedio cuando pulses
+exportAvgBtn.onclick = () => {
+    if (!multiAvgData) return;
+    let stats = multiAvgData.stats;
+    let marcaProms = multiAvgData.marcaProms;
+    let csv = `AudioFile,${stats.audioFile}\nFragmentStart,${stats.fragIni.toFixed(3)}\nFragmentEnd,${stats.fragFin.toFixed(3)}\n`;
+    csv += `Marca,Compás,Tiempo (segundos),BPM promedio,BPM mínimo,BPM máximo,Desviación máx,Desviación mín,Desviación prom\n`;
+
+    marcaProms.forEach(m => {
+        csv += `${m.marca},${m.compas},${m.time.toFixed(3)},${m.avgBpm.toFixed(2)},${m.minBpm.toFixed(2)},${m.maxBpm.toFixed(2)},${m.desvMax.toFixed(2)},${m.desvMin.toFixed(2)},${m.desvProm.toFixed(2)}\n`;
+    });
+
+    // Estadísticas globales al final
+    csv += `\nDesviacion maxima entre marcas,${stats.desvMax.toFixed(2)}\nDesviacion minima entre marcas,${stats.desvMin.toFixed(2)}\nDesviacion promedio entre marcas,${stats.desvAvg.toFixed(2)}\n`;
+
+    let blob = new Blob([csv], { type: 'text/csv' });
+    let a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'tempo_map_promedio.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+};
+
+
+
+// ------- Comportamiento Tap Tempo ---------
+
+tapTempoBtn.onclick = ()=>{
+    if(!audioBuffer || duration <= 0) return;
+    // Toma el tiempo actual del audio si está reproduciendo, si no, en pauseOffset
+    let t = playing ? currentTime : pauseOffset;
+    addMarker(t);
+};
+// ------------------------------------------
+
+reset();

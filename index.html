@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>🎵 Tempo Map Creator PRO v4</title>
+    <meta name="viewport" content="width=900, initial-scale=1">
+    <link rel="stylesheet" href="/css/estilos.css">
+</head>
+<body>
+    <header>
+        <h1>🎵 Tempo Map Creator PRO</h1>
+        <div class="subtitle">Medí BPM, exporta, importa, promedia y gestiona marcas como Pro</div>
+    </header>
+
+    <section class="top-bar">
+        <div class="inputs-row">
+            <label><span>Audio:</span> <input type="file" id="file" accept="audio/*"></label>
+            <label><span>Metrónomo:</span> <input type="file" id="clickFile" accept="audio/*"></label>
+            <label><span>Input Lag (seg):</span> <input type="number" id="lagInput" class="lag-input" value="0.000" min="-1" max="1" step="0.001"></label>
+            <label><span>Cifra de compás:</span> <input type="number" min="1" step="1" id="cifraCompas" value="4"></label>
+        </div>
+        <div class="file-buttons-row">
+            <input type="file" id="importCsv" accept=".csv" style="display:none;">
+            <button id="importBtn">📥 Importar CSV</button>
+            <input type="file" id="multiImportCsv" accept=".csv" multiple style="display:none;">
+            <button id="importMultiBtn">📥 Promediar CSVs</button>
+            <button id="export" disabled>💾 Exportar CSV</button>
+            <button id="exportAvgBtn" disabled>💾 Exportar Promedio</button>
+        </div>
+    </section>
+
+    <section class="stats-panels">
+        <div class="tap-tempo-box" id="tapTempoBtn" title="Añadir marca al tempo actual mediante tap">
+            <span class="tap-tempo-icon">🥁</span>
+            <span class="tap-tempo-label">Tap Tempo</span>
+        </div>
+        <div class="bpm-panel">
+            <span class="bpm-label">BPM Actual</span>
+            <span class="bpm-value" id="actualBpmVal">--</span>
+        </div>
+        <div class="audio-info-panel">
+            <div><b>Audio cargado:</b> <span id="fileNameInfo">--</span></div>
+            <div><b>Duración original:</b> <span id="origDuration">--</span> s</div>
+            <div><b>Recorte inicio:</b> <span id="fragStart">--</span> s</div>
+            <div><b>Recorte fin:</b> <span id="fragEnd">--</span> s</div>
+        </div>
+    </section>
+
+    <section class="tools-bar">
+        <b>Edición:</b>
+        <button id="normal" class="active">🖱️ Editar</button>
+        <button id="pencil">✏️ Añadir (M)</button>
+        <button id="eraser">🧹 Borrar</button>
+        <button id="clearBtn" title="Borrar todas las marcas">🗑️ Borrar todas</button>
+        <button id="undoBtn" disabled title="Deshacer">↩️</button>
+        <button id="redoBtn" disabled title="Rehacer">↪️</button>
+    </section>
+
+    <main>
+        <div class="waveform-canvas-wrap" id="waveformCont">
+            <canvas id="waveform"></canvas>
+            <div class="zoom-controls" id="zoomControls">
+                <button id="zoomout">−</button>
+                <span id="zoomval">1.0x</span>
+                <button id="zoomin">+</button>
+            </div>
+        </div>
+        <div class="graph-wrap" id="bpmGraphCont"><canvas id="bpmGraph"></canvas></div>
+        <div class="durcompas-wrap" id="durCompasGraphCont"><canvas id="durCompasGraph"></canvas></div>
+        <section class="playback-controls-row">
+            <button id="play" disabled>▶️ Play</button>
+            <button id="pause" disabled>⏸️ Pause</button>
+            <button id="stop" disabled>⏹️ Stop</button>
+            <label><span>Vol. música:</span> <input type="range" id="mainVol" min="0" max="1" step="0.01" value="1"></label>
+            <label><span>Vol. metrónomo:</span> <input type="range" id="metroVol" min="0" max="1" step="0.01"></label>
+            <button id="metroBtn" style="background:#333;">🔈 Metrónomo</button>
+        </section>
+        <section class="side-data">
+            <div class="data-panel">
+                <span>Tiempo actual: <b id="currentTime">0.00</b>s</span>
+                <span>Duración: <b id="duration">0.00</b>s</span>
+                <span>Marcas: <b id="countMarkers">0</b></span>
+                <span>BPM Prom: <b id="avgBpm">--</b></span>
+            </div>
+            <b style="display:block; margin-bottom:8px;">Marcas:</b>
+            <div class="marker-list" id="markerList"></div>
+        </section>
+    </main>
+    <div id="fragmentDialogRoot"></div>
+    <script src="/js/tempo-map.js"></script>
+</body>
+</html>
