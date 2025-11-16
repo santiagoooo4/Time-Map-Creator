@@ -118,6 +118,8 @@
         <label><b>Metrónomo:</b> <input type="file" id="clickFile" accept="audio/*"></label>
         <label><b>Input Lag (seg):</b> <input type="number" id="lagInput" class="lag-input" value="0.000" min="-1" max="1" step="0.001"></label>
         <label><b>Cifra de compás:</b> <input type="number" min="1" step="1" id="cifraCompas" style="width:55px;padding:6px 9px;border-radius:5px;border:1px solid #42d262;background:#191a1b;color:#42d262;" value="4"></label>
+        <input type="file" id="importCsv" accept=".csv" style="display:none;">
+        <button id="importBtn" style="margin-left:0;">📥 Importar CSV</button>
         <button id="export" disabled style="margin-left:auto;">💾 Exportar CSV</button>
     </div>
 
@@ -759,10 +761,19 @@ exportBtn.onclick=()=>{
         alert("No hay marcas para exportar.");
         return;
     }
+    // Extrae información
+    let audioFileName = fileInput.files[0]?.name ?? '';
+    let fragIni = audioFragment.t0?.toFixed(3) ?? '0.000';
+    let fragFin = audioFragment.t1?.toFixed(3) ?? '0.000';
 
-    let csv = 'Marca,Compás,Tiempo (segundos),BPM\n';
+    // Cabecera extendida
+    let csv =
+        `AudioFile,${audioFileName}\n` +
+        `FragmentStart,${fragIni}\n` +
+        `FragmentEnd,${fragFin}\n` +
+        `Marca,Compás,Tiempo (segundos),BPM\n`;
+
     markers.forEach((m, i) => {
-        // Cálculo del compás al que pertenece cada marca
         let compasNum = Math.floor(i / cifraCompas) + 1;
         csv += `${i + 1},${compasNum},${m.time.toFixed(3)},${m.bpm ? m.bpm.toFixed(2) : 'N/A'}\n`;
     });
@@ -774,6 +785,75 @@ exportBtn.onclick=()=>{
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+};
+
+importBtn.onclick = () => {
+    importCsv.click();
+};
+
+importCsv.onchange = (e) => {
+    const file = importCsv.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function(evt) {
+        let text = evt.target.result;
+        let lines = text.split(/\r?\n/);
+
+        // Lee cabecera extendida
+        let audioFile = '';
+        let fragIni = 0;
+        let fragFin = 0;
+        let dataIdx = 0;
+
+        lines.forEach((line, idx) => {
+            if (line.startsWith('AudioFile,')) {
+                audioFile = line.split(',')[1] ?? '';
+                dataIdx = idx + 1;
+            }
+            if (line.startsWith('FragmentStart,')) {
+                fragIni = parseFloat(line.split(',')[1] ?? '0');
+                dataIdx = idx + 1;
+            }
+            if (line.startsWith('FragmentEnd,')) {
+                fragFin = parseFloat(line.split(',')[1] ?? '0');
+                dataIdx = idx + 1;
+            }
+        });
+
+        // Busca la cabecera de columnas y las datos
+        let marcas = [];
+        for (let i = dataIdx; i < lines.length; i++) {
+            let line = lines[i].trim();
+            if (!line || line.startsWith('Marca')) continue;
+            let [numMarca, numCompas, tSeg, bpmVal] = line.split(',');
+
+            if (tSeg && !isNaN(parseFloat(tSeg))) {
+                marcas.push({ time: parseFloat(tSeg), bpm: bpmVal === 'N/A' ? null : parseFloat(bpmVal) });
+            }
+        }
+
+        if (marcas.length === 0) {
+            alert('No se encontraron marcas válidas en el archivo CSV.');
+            return;
+        }
+
+        // Aplica marcas y fragmento
+        audioFragment = {
+            useFull: (fragIni === 0 && fragFin === 0) ? true : false,
+            t0: fragIni,
+            t1: fragFin,
+        };
+        markers = marcas;
+        calcBPM();
+        updateMarkersInfo();
+        scheduleDrawWave();
+        drawBpmGraph();
+        drawDurCompasGraph();
+
+        alert(`Archivo importado!\nAudio: ${audioFile}\nFragmento: [${fragIni}s - ${fragFin}s]\nMarcas cargadas: ${marcas.length}`);
+    };
+    reader.readAsText(file);
 };
 
 
