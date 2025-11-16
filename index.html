@@ -59,11 +59,12 @@
     <main>
         <div class="waveform-canvas-wrap" id="waveformCont">
             <canvas id="waveform"></canvas>
-            <div class="zoom-controls" id="zoomControls">
-                <button id="zoomout">−</button>
-                <span id="zoomval">1.0x</span>
-                <button id="zoomin">+</button>
-            </div>
+            <!-- Ahora los controles de zoom están fuera del área scrolleable -->
+        </div>
+        <div class="zoom-controls" id="zoomControls" style="position:fixed; top:120px; right:35px; z-index:999;">
+            <button id="zoomout">−</button>
+            <span id="zoomval">1.0x</span>
+            <button id="zoomin">+</button>
         </div>
         <div class="graph-wrap" id="bpmGraphCont"><canvas id="bpmGraph"></canvas></div>
         <div class="durcompas-wrap" id="durCompasGraphCont"><canvas id="durCompasGraph"></canvas></div>
