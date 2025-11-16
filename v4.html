@@ -121,6 +121,10 @@
         <input type="file" id="importCsv" accept=".csv" style="display:none;">
         <button id="importBtn" style="margin-left:0;">📥 Importar CSV</button>
         <button id="export" disabled style="margin-left:auto;">💾 Exportar CSV</button>
+        <input type="file" id="multiImportCsv" accept=".csv" multiple style="display:none;">
+        <button id="importMultiBtn" style="margin-left:0;">📥 Promediar CSVs</button>
+        <button id="exportAvgBtn" style="margin-left:0;" disabled>💾 Exportar Promedio</button>
+
     </div>
 
     <!-- Panel Tap Tempo y BPM actual -->
@@ -226,8 +230,11 @@ const fileInput = document.getElementById('file'),
     origDuration = document.getElementById('origDuration'),
     fragStart = document.getElementById('fragStart'),
     fragEnd = document.getElementById('fragEnd'),
-    importMultiCsv = document.getElementById('importMultiCsv');
-    const importMultiBtn = document.getElementById('importMultiBtn');
+    importMultiCsv = document.getElementById('importMultiCsv'),
+    importMultiBtn = document.getElementById('importMultiBtn'),
+    multiImportCsv = document.getElementById('multiImportCsv'),
+    exportAvgBtn = document.getElementById('exportAvgBtn');
+
 
 
 
@@ -874,6 +881,135 @@ importCsv.onchange = (e) => {
     };
     reader.readAsText(file);
 };
+
+let multiAvgData = null; // Almacena el resultado promediado temporalmente
+
+importMultiBtn.onclick = () => {
+    multiImportCsv.click();
+};
+
+multiImportCsv.onchange = (e) => {
+    const files = multiImportCsv.files;
+    if (!files || files.length < 2) {
+        alert('Selecciona al menos dos archivos CSV para promediar.');
+        return;
+    }
+    let parsed = [];
+    let info = null;
+    let fileReads = [];
+    for (let f = 0; f < files.length; f++) {
+        fileReads.push(new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = function(evt) {
+                let text = evt.target.result;
+                let lines = text.split(/\r?\n/);
+                let audioFile = '';
+                let fragIni = 0, fragFin = 0, marcas = [];
+                for (let l = 0; l < lines.length; l++) {
+                    let line = lines[l].trim();
+                    if (line.startsWith('AudioFile,')) audioFile = line.split(',')[1]?.trim();
+                    if (line.startsWith('FragmentStart,')) fragIni = parseFloat(line.split(',')[1]?.trim() ?? '0');
+                    if (line.startsWith('FragmentEnd,')) fragFin = parseFloat(line.split(',')[1]?.trim() ?? '0');
+                    if (line.startsWith('Marca')) continue; // Saltar cabecera
+                    if (line.match(/^\d+,/)) {
+                        let [numMarca, numCompas, tSeg, bpmVal] = line.split(',');
+                        marcas.push({
+                            numMarca: parseInt(numMarca),
+                            compasNum: parseInt(numCompas),
+                            time: parseFloat(tSeg),
+                            bpm: bpmVal === 'N/A' ? null : parseFloat(bpmVal),
+                        });
+                    }
+                }
+                resolve({ audioFile, fragIni, fragFin, marcas });
+            };
+            reader.onerror = reject;
+            reader.readAsText(files[f]);
+        }));
+    }
+
+    // Espera a leer todos los archivos
+    Promise.all(fileReads).then(arrays => {
+        // Validar todos los archivos tengan mismo audioFile, mismos fragmentos y misma cantidad de marcas
+        info = arrays[0];
+        let ok = arrays.every(a =>
+            a.audioFile === info.audioFile &&
+            Math.abs(a.fragIni - info.fragIni) < 0.001 &&
+            Math.abs(a.fragFin - info.fragFin) < 0.001 &&
+            a.marcas.length === info.marcas.length
+        );
+        if (!ok) {
+            alert('Todos los archivos deben tener el mismo audio, fragmento y cantidad de marcas.');
+            exportAvgBtn.disabled = true;
+            return;
+        }
+
+        // Promedio y estadísticas para cada marca
+        let marcaProms = [];
+        for (let i = 0; i < info.marcas.length; i++) {
+            let bpms = arrays.map(a => a.marcas[i].bpm);
+            let avg = bpms.reduce((a, b) => a + b, 0) / bpms.length;
+            let min = Math.min(...bpms);
+            let max = Math.max(...bpms);
+            let desvMax = Math.max(...bpms.map(b => Math.abs(b - avg)));
+            let desvMin = Math.min(...bpms.map(b => Math.abs(b - avg)));
+            let desvProm = bpms.map(b => Math.abs(b - avg)).reduce((a, b) => a + b, 0) / bpms.length;
+            marcaProms.push({
+                marca: info.marcas[i].numMarca,
+                compas: info.marcas[i].compasNum,
+                time: info.marcas[i].time,
+                avgBpm: avg,
+                minBpm: min,
+                maxBpm: max,
+                desvMax,
+                desvMin,
+                desvProm
+            });
+        }
+
+        // Estadísticas globales de desviación (máx, mín, promedio)
+        let deviations = marcaProms.map(m => m.desvProm);
+        let stats = {
+            marcaCount: info.marcas.length,
+            audioFile: info.audioFile,
+            fragIni: info.fragIni,
+            fragFin: info.fragFin,
+            desvMin: Math.min(...deviations),
+            desvMax: Math.max(...deviations),
+            desvAvg: deviations.reduce((a, b) => a + b, 0) / deviations.length
+        };
+
+        // Habilita exportación
+        exportAvgBtn.disabled = false;
+        multiAvgData = { marcaProms, stats };
+        alert(`¡Promedio listo! Exporta el resultado con "Exportar Promedio"`);
+    });
+};
+
+// EXPORTA el promedio cuando pulses
+exportAvgBtn.onclick = () => {
+    if (!multiAvgData) return;
+    let stats = multiAvgData.stats;
+    let marcaProms = multiAvgData.marcaProms;
+    let csv = `AudioFile,${stats.audioFile}\nFragmentStart,${stats.fragIni.toFixed(3)}\nFragmentEnd,${stats.fragFin.toFixed(3)}\n`;
+    csv += `Marca,Compás,Tiempo (segundos),BPM promedio,BPM mínimo,BPM máximo,Desviación máx,Desviación mín,Desviación prom\n`;
+
+    marcaProms.forEach(m => {
+        csv += `${m.marca},${m.compas},${m.time.toFixed(3)},${m.avgBpm.toFixed(2)},${m.minBpm.toFixed(2)},${m.maxBpm.toFixed(2)},${m.desvMax.toFixed(2)},${m.desvMin.toFixed(2)},${m.desvProm.toFixed(2)}\n`;
+    });
+
+    // Estadísticas globales al final
+    csv += `\nDesviacion maxima entre marcas,${stats.desvMax.toFixed(2)}\nDesviacion minima entre marcas,${stats.desvMin.toFixed(2)}\nDesviacion promedio entre marcas,${stats.desvAvg.toFixed(2)}\n`;
+
+    let blob = new Blob([csv], { type: 'text/csv' });
+    let a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'tempo_map_promedio.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+};
+
 
 
 // ------- Comportamiento Tap Tempo ---------
