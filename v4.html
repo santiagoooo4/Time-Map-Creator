@@ -146,6 +146,8 @@
         <button id="eraser">🧹 Borrar</button>
         <button id="undoBtn" disabled title="Deshacer">↩️</button>
         <button id="redoBtn" disabled title="Rehacer">↪️</button>
+        <button id="clearBtn" title="Borrar todas las marcas">🗑️ Borrar todas</button>
+
     </div>
     <div class="waveform-canvas-wrap" id="waveformCont">
         <canvas id="waveform"></canvas>
@@ -233,6 +235,7 @@ const fileInput = document.getElementById('file'),
     importMultiCsv = document.getElementById('importMultiCsv'),
     importMultiBtn = document.getElementById('importMultiBtn'),
     multiImportCsv = document.getElementById('multiImportCsv'),
+    clearBtn = document.getElementById('clearBtn'),
     exportAvgBtn = document.getElementById('exportAvgBtn');
 
 
@@ -269,6 +272,19 @@ function doRedo() {
 }
 undoBtn.onclick = doUndo; redoBtn.onclick = doRedo;
 
+clearBtn.onclick = () => {
+    if (!markers.length) return;
+    // Guardar estado previo para undo
+    saveUndo();
+    markers = [];
+    calcBPM();
+    updateMarkersInfo();
+    scheduleDrawWave();
+    drawBpmGraph();
+    drawDurCompasGraph();
+    redoStack = [];
+    redoBtn.disabled = true;
+};
 
 document.addEventListener('keydown', function(e){
     if((e.ctrlKey||e.metaKey) && e.key==='z' && !e.shiftKey) {doUndo();e.preventDefault();}
