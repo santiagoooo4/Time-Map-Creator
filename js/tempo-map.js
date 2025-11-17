@@ -418,12 +418,16 @@ function updateBpmPanel(){
 
 function addMarker(rawtime){
     saveUndo();
-    let time = rawtime + Number(inputLag);
-    time = Math.max(0.001,Math.min(time,duration-0.001));
-    markers.push({time,bpm:null});
-    markers.sort((a,b)=>a.time-b.time); 
-    calcBPM(); updateMarkersInfo(); scheduleDrawWave(); drawBpmGraph(); drawDurCompasGraph();
-    redoStack=[]; redoBtn.disabled=true;
+    let time = Math.max(0.001, Math.min(rawtime, duration - 0.001));
+    markers.push({ time: +(time + inputLag).toFixed(3), timeOriginal: +time.toFixed(3), bpm: null });
+    markers.sort((a, b) => a.time - b.time);
+    calcBPM();
+    updateMarkersInfo();
+    scheduleDrawWave();
+    drawBpmGraph();
+    drawDurCompasGraph();
+    redoStack = [];
+    redoBtn.disabled = true;
 }
 function removeMarkerAt(x){
     saveUndo();
@@ -508,7 +512,27 @@ waveCont.addEventListener('wheel', (e) => {
 }, {passive: false});    
 mainVolCtrl.oninput=()=>{mainVol=parseFloat(mainVolCtrl.value);}
 metroVolCtrl.oninput=()=>{metroClickVol=parseFloat(metroVolCtrl.value);}
-lagInput.oninput=()=>{inputLag=Number(lagInput.value);}
+lagInput.oninput = () => {
+    let val = parseFloat(lagInput.value);
+    if (isNaN(val)) val = 0;
+    inputLag = Math.max(-5, Math.min(5, parseFloat(val.toFixed(3))));
+
+    // Aplica el input lag a todas las marcas:
+    // El lagInput siempre representa el lag USADO, por lo que
+    // el tiempo real de cada marca = tiempo original + inputLag
+    
+    markers.forEach(m => {
+        // Suponiendo que el lag es siempre relativo a ese tiempo
+        // Si quieres que sea respecto al tiempo del audio puedes ajustar aquí
+        m.time = +(m.timeOriginal + inputLag).toFixed(3);
+    });
+
+    calcBPM();
+    updateMarkersInfo();
+    scheduleDrawWave();
+    drawBpmGraph();
+    drawDurCompasGraph();
+};
 metroBtn.onclick = function(){
     metronomeOn = !metronomeOn;
     metroBtn.style.background = metronomeOn ? "#46f" : "#333";
@@ -656,28 +680,47 @@ importCsv.onchange = (e) => {
 
         lines.forEach((line, idx) => {
             if (line.startsWith('AudioFile,')) {
-                audioFile = line.split(',')[1] ?? '';
+                audioFile = line.split(',')[1]?.trim() || '';
                 dataIdx = idx + 1;
             }
             if (line.startsWith('FragmentStart,')) {
-                fragIni = parseFloat(line.split(',')[1] ?? '0');
+                fragIni = parseFloat(line.split(',')[1]?.trim() ?? '0');
                 dataIdx = idx + 1;
             }
             if (line.startsWith('FragmentEnd,')) {
-                fragFin = parseFloat(line.split(',')[1] ?? '0');
+                fragFin = parseFloat(line.split(',')[1]?.trim() ?? '0');
                 dataIdx = idx + 1;
             }
         });
 
-        // Busca la cabecera de columnas y las datos
-        let marcas = [];
-        for (let i = dataIdx; i < lines.length; i++) {
-            let line = lines[i].trim();
-            if (!line || line.startsWith('Marca')) continue;
-            let [numMarca, numCompas, tSeg, bpmVal] = line.split(',');
+        // Detecta tipo de cabecera
+        let simpleHeader = "Marca,Compás,Tiempo (segundos),BPM";
+        let promedioHeader = "Marca,Compás,Tiempo (segundos),BPM promedio";
+        let headerLine = lines.find(line => line.startsWith("Marca,Compás"));
 
-            if (tSeg && !isNaN(parseFloat(tSeg))) {
-                marcas.push({ time: parseFloat(tSeg), bpm: bpmVal === 'N/A' ? null : parseFloat(bpmVal) });
+        let marcas = [];
+        for (let i = 0; i < lines.length; i++) {
+            let line = lines[i].trim();
+            if (!line || line.startsWith("Marca")) continue;
+            let cols = line.split(",");
+            if (headerLine && headerLine.startsWith("Marca,Compás,Tiempo (segundos),BPM")) {
+                // medición simple
+                let [numMarca, numCompas, tSeg, bpmVal] = cols;
+                if (tSeg && !isNaN(parseFloat(tSeg))) {
+                    marcas.push({
+                        time: parseFloat(tSeg),
+                        bpm: bpmVal === 'N/A' ? null : parseFloat(bpmVal)
+                    });
+                }
+            } else if (headerLine && headerLine.startsWith("Marca,Compás,Tiempo (segundos),BPM promedio")) {
+                // medición promedio
+                let [numMarca, numCompas, tSeg, bpmProm, bpmMin, bpmMax] = cols;
+                if (tSeg && !isNaN(parseFloat(tSeg))) {
+                    marcas.push({
+                        time: parseFloat(tSeg),
+                        bpm: bpmProm === 'N/A' ? null : parseFloat(bpmProm)
+                    });
+                }
             }
         }
 
@@ -692,7 +735,14 @@ importCsv.onchange = (e) => {
             t0: fragIni,
             t1: fragFin,
         };
-        markers = marcas;
+
+        // resetear timeOriginal para input lag
+        markers = marcas.map(m => ({
+            time: +m.time.toFixed(3),
+            timeOriginal: +m.time.toFixed(3),
+            bpm: m.bpm
+        }));
+
         calcBPM();
         updateMarkersInfo();
         scheduleDrawWave();
@@ -703,6 +753,7 @@ importCsv.onchange = (e) => {
     };
     reader.readAsText(file);
 };
+
 
 let multiAvgData = null; // Almacena el resultado promediado temporalmente
 
