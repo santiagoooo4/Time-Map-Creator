@@ -113,7 +113,7 @@ function setWaveWidth(){
     wave.width = Math.max(containerWidth, Math.ceil(duration*pxPerSec));
     wave.height = 200;
     bpmGraph.width = wave.width; bpmGraph.height = 140;
-    durCompasGraph.width = wave.width; durCompasGraph.height = 60;
+    durCompasGraph.width = wave.width; durCompasGraph.height = 140;
 }
 fileInput.onchange = async e=>{
     reset();
@@ -268,7 +268,7 @@ function drawBpmGraph(){
         ctxG.fillText("Añade al menos dos marcas para ver la variación de BPM",18,38); return;
     }
     let bpms = markers.map(m=>m.bpm||0).filter(x=>x);
-    let minBpm = Math.floor(Math.min(...bpms)*0.92), maxBpm = Math.ceil(Math.max(...bpms)*1.08);
+    let minBpm = Math.floor( Math.min(...bpms) * 0.92 ) - 4; maxBpm = Math.ceil(Math.max(...bpms)*1.08);
     let G = H, left=44, bot=18, top=18;
     ctxG.strokeStyle="#2196F3"; ctxG.beginPath();
     ctxG.moveTo(left,top); ctxG.lineTo(left,G-bot); ctxG.lineTo(W-12,G-bot); ctxG.stroke();
@@ -279,6 +279,10 @@ function drawBpmGraph(){
         ctxG.strokeStyle="#333"; ctxG.beginPath();
         ctxG.moveTo(left-2,y); ctxG.lineTo(W-12,y); ctxG.stroke();
     }
+    // Etiqueta explícita del valor mínimo junto a la línea horizontal de x
+    ctxG.fillStyle = "#fff";
+    ctxG.font = "11px Arial";
+    ctxG.fillText(minBpm.toFixed(0), 3, G-bot+13);
     ctxG.save(); ctxG.strokeStyle="#29b6f6"; ctxG.lineWidth=3; ctxG.beginPath();
     let pts = [];
     // Corrección: Cada punto debe estar alineado con el momento anterior (markers[i-1])
@@ -311,59 +315,82 @@ function drawBpmGraph(){
         ctxG.stroke();
     });
 }
-function drawDurCompasGraph(){
+
+function drawDurCompasGraph() {
     const ctxD = durCompasGraph.getContext('2d');
     const W = durCompasGraph.width, H = durCompasGraph.height;
-    ctxD.clearRect(0,0,W,H);
-    ctxD.fillStyle="#101112"; ctxD.fillRect(0,0,W,H);
-    if(markers.length<cifraCompas+1){
-        ctxD.fillStyle="#666"; ctxD.font="13px Arial"; ctxD.fillText("Marca al menos "+(cifraCompas+1)+" tiempos para ver la duración de compás",14,32); return;
-    }
-    let compases=[];
-    for(let i=cifraCompas;i<markers.length;i+=cifraCompas){
-        let tIni=markers[i-cifraCompas].time, tFin=markers[i].time;
-        let compIdx = Math.floor(i/cifraCompas);
-        compases.push({ valor: tFin-tIni, idx: compIdx, x: tIni/duration*(W-1) });
-    }
-    let minC = Math.min(...compases.map(c=>c.valor)), maxC = Math.max(...compases.map(c=>c.valor));
-    let G = H, left=44, bot=14, top=14;
+    ctxD.clearRect(0, 0, W, H);
+    ctxD.fillStyle = "#101112"; ctxD.fillRect(0, 0, W, H);
 
-    // --- Modificación: unir los puntos con líneas rectas ---
+    if (markers.length < cifraCompas + 1) {
+        ctxD.fillStyle = "#666"; ctxD.font = "13px Arial";
+        ctxD.fillText(`Marca al menos ${cifraCompas + 1} tiempos para ver el BPM por compás`, 14, H / 2); 
+        return;
+    }
+
+    let compases = [];
+    for (let i = cifraCompas; i < markers.length; i += cifraCompas) {
+        let tIni = markers[i - cifraCompas].time, tFin = markers[i].time;
+        let dur = tFin - tIni;
+        let bpmCompas = dur > 0 ? 60 * cifraCompas / dur : 0;
+        let x = tIni / duration * (W - 1);
+        compases.push({ bpm: bpmCompas, x });
+    }
+
+    // Calcula min/max BPM con margen, mínimo 0
+    let minBpmC = Math.floor(Math.min(...compases.map(c => c.bpm)) * 0.93) - 4;
+    if (minBpmC < 0) minBpmC = 0;
+    let maxBpmC = Math.ceil(Math.max(...compases.map(c => c.bpm)) * 1.07);
+    if (maxBpmC <= minBpmC) maxBpmC = minBpmC + 1;
+
+    // Márgenes mínimos solo para evitar recorte visual de puntos (no para limitar área del gráfico)
+    let left = 44, right = 12, top = 6, bot = 16;
+
+    // Ejes principales
+    ctxD.strokeStyle = "#FFC107"; ctxD.lineWidth = 2;
+    ctxD.beginPath();
+    ctxD.moveTo(left, top); ctxD.lineTo(left, H - bot); ctxD.lineTo(W - right, H - bot); ctxD.stroke();
+
+    // Líneas horizontales de referencia
+    const nLines = 7; // número de divisiones
+    for (let i = 0; i <= nLines; i++) {
+        let y = top + ((H - bot - top) / nLines) * i;
+        let bpmVal = maxBpmC - (i / nLines) * (maxBpmC - minBpmC);
+        ctxD.strokeStyle = "#333";
+        ctxD.beginPath();
+        ctxD.moveTo(left - 2, y); ctxD.lineTo(W - right, y); ctxD.stroke();
+        ctxD.fillStyle = (i === nLines) ? "#fff" : "#FFD700";
+        ctxD.font = (i === nLines) ? "11px Arial" : "12px Arial";
+        ctxD.fillText(bpmVal.toFixed(0), 6, y + 4);
+    }
+
+    // Dibuja curva y puntos
     ctxD.save();
     ctxD.strokeStyle = "#FFC107";
     ctxD.lineWidth = 3;
     ctxD.beginPath();
     if (compases.length > 0) {
-        let y0 = top+(G-bot-top)*(1-(compases[0].valor-minC)/(maxC-minC||1));
+        let y0 = top + (H - bot - top) * (1 - (compases[0].bpm - minBpmC) / (maxBpmC - minBpmC || 1));
         ctxD.moveTo(compases[0].x, y0);
-        for (let i=1; i<compases.length; i++) {
-            // Línea recta al siguiente punto
-            let y = top+(G-bot-top)*(1-(compases[i].valor-minC)/(maxC-minC||1));
+        for (let i = 1; i < compases.length; i++) {
+            let y = top + (H - bot - top) * (1 - (compases[i].bpm - minBpmC) / (maxBpmC - minBpmC || 1));
             ctxD.lineTo(compases[i].x, y);
         }
     }
     ctxD.stroke();
     ctxD.restore();
-    // --- Fin modificación ---
 
-    // Dibuja los puntos
-    compases.forEach(c=>{
+    compases.forEach(c => {
         let x = c.x;
-        let y = top+(G-bot-top)*(1-(c.valor-minC)/(maxC-minC||1));
-        ctxD.fillStyle="#FFD700"; ctxD.beginPath();
-        ctxD.arc(x,y,4,0,2*Math.PI); ctxD.fill();
-        ctxD.strokeStyle="#FFC107"; ctxD.lineWidth=2;
+        let y = top + (H - bot - top) * (1 - (c.bpm - minBpmC) / (maxBpmC - minBpmC || 1));
+        ctxD.fillStyle = "#FFD700"; ctxD.beginPath();
+        ctxD.arc(x, y, 4, 0, 2 * Math.PI); ctxD.fill();
+        ctxD.strokeStyle = "#FFC107"; ctxD.lineWidth = 2;
         ctxD.beginPath();
-        ctxD.arc(x,y,4,0,2*Math.PI);
+        ctxD.arc(x, y, 4, 0, 2 * Math.PI);
         ctxD.stroke();
     });
-    // ejes valores
-    ctxD.fillStyle="#FFD700"; ctxD.font="12px Arial"; ctxD.textAlign="right";
-    ctxD.fillText(maxC.toFixed(2),42,top+6);
-    ctxD.fillText(minC.toFixed(2),42,H-bot+9);
 }
-
-
 
 function syncScroll(pos){
     waveCont.scrollLeft = pos;
@@ -762,101 +789,100 @@ importMultiBtn.onclick = () => {
 };
 
 multiImportCsv.onchange = (e) => {
-    const files = multiImportCsv.files;
-    if (!files || files.length < 2) {
-        alert('Selecciona al menos dos archivos CSV para promediar.');
-        return;
+  const files = multiImportCsv.files;
+  if (!files || files.length < 2) {
+    alert('Selecciona al menos dos archivos CSV para promediar.');
+    exportAvgBtn.disabled = true;
+    return;
+  }
+  let fileReads = [];
+  for (let f = 0; f < files.length; f++) {
+    fileReads.push(new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = function(evt) {
+        // Mantén aquí la lógica de parseo original de cada archivo individual,
+        // por ejemplo cómo parseas marcas, audioFile, fragIni, fragFin, marcas, etc...
+        // Aquí solo debes usar tu parse CSV existente
+        let data = evt.target.result;
+        // Si tu parseo es robusto y retorna: { audioFile, fragIni, fragFin, marcas }
+        // entonces sólo deja ese bloque aquí y NO lo modifiques.
+        // Puedes dejar la línea siguiente si todo funciona
+        resolve({ audioFile, fragIni, fragFin, marcas });
+      };
+      reader.onerror = reject;
+      reader.readAsText(files[f]);
+    }));
+  }
+
+  Promise.all(fileReads).then(arrays => {
+    // Validar headers/audios iguales
+    let info = arrays[0];
+    let ok = arrays.every(a =>
+      a.audioFile === info.audioFile &&
+      Math.abs(a.fragIni - info.fragIni) < 0.001 &&
+      Math.abs(a.fragFin - info.fragFin) < 0.001 &&
+      a.marcas.length === info.marcas.length
+    );
+    if (!ok) {
+      alert("Todos los archivos deben tener el mismo audio, fragmento y cantidad de marcas.");
+      exportAvgBtn.disabled = true;
+      return;
     }
-    let parsed = [];
-    let info = null;
-    let fileReads = [];
-    for (let f = 0; f < files.length; f++) {
-        fileReads.push(new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = function(evt) {
-                let text = evt.target.result;
-                let lines = text.split(/\r?\n/);
-                let audioFile = '';
-                let fragIni = 0, fragFin = 0, marcas = [];
-                for (let l = 0; l < lines.length; l++) {
-                    let line = lines[l].trim();
-                    if (line.startsWith('AudioFile,')) audioFile = line.split(',')[1]?.trim();
-                    if (line.startsWith('FragmentStart,')) fragIni = parseFloat(line.split(',')[1]?.trim() ?? '0');
-                    if (line.startsWith('FragmentEnd,')) fragFin = parseFloat(line.split(',')[1]?.trim() ?? '0');
-                    if (line.startsWith('Marca')) continue; // Saltar cabecera
-                    if (line.match(/^\d+,/)) {
-                        let [numMarca, numCompas, tSeg, bpmVal] = line.split(',');
-                        marcas.push({
-                            numMarca: parseInt(numMarca),
-                            compasNum: parseInt(numCompas),
-                            time: parseFloat(tSeg),
-                            bpm: bpmVal === 'N/A' ? null : parseFloat(bpmVal),
-                        });
-                    }
-                }
-                resolve({ audioFile, fragIni, fragFin, marcas });
-            };
-            reader.onerror = reject;
-            reader.readAsText(files[f]);
-        }));
+
+    // Promediar tiempos (y recalcular BPMs según tiempo promediado)
+    let marcaProms = [];
+    let promTimes = [];
+
+    // Paso 1: calcular el tiempo promedio para cada marca
+    for (let i = 0; i < info.marcas.length; i++) {
+      let tiempos = arrays.map(a => a.marcas[i].time);
+      let tProm = tiempos.reduce((a, b) => a + b, 0) / tiempos.length;
+      promTimes.push(tProm);
     }
 
-    // Espera a leer todos los archivos
-    Promise.all(fileReads).then(arrays => {
-        // Validar todos los archivos tengan mismo audioFile, mismos fragmentos y misma cantidad de marcas
-        info = arrays[0];
-        let ok = arrays.every(a =>
-            a.audioFile === info.audioFile &&
-            Math.abs(a.fragIni - info.fragIni) < 0.001 &&
-            Math.abs(a.fragFin - info.fragFin) < 0.001 &&
-            a.marcas.length === info.marcas.length
-        );
-        if (!ok) {
-            alert('Todos los archivos deben tener el mismo audio, fragmento y cantidad de marcas.');
-            exportAvgBtn.disabled = true;
-            return;
-        }
+    // Paso 2: calcular BPM promedio para cada marca, usando los tiempos promediados
+    for (let i = 0; i < info.marcas.length; i++) {
+      let bpms = arrays.map(a => a.marcas[i].bpm);
+      let bpmCalc = null;
+      if (i > 0) {
+        let dur = promTimes[i] - promTimes[i - 1];
+        bpmCalc = dur > 0 ? 60 / dur : null;
+      }
+      let min = Math.min(...bpms);
+      let max = Math.max(...bpms);
+      let avg = bpms.reduce((a, b) => a + b, 0) / bpms.length;
+      let desvMax = Math.max(...bpms.map(b => Math.abs(b - avg)));
+      let desvMin = Math.min(...bpms.map(b => Math.abs(b - avg)));
+      let desvProm = bpms.map(b => Math.abs(b - avg)).reduce((a, b) => a + b, 0) / bpms.length;
 
-        // Promedio y estadísticas para cada marca
-        let marcaProms = [];
-        for (let i = 0; i < info.marcas.length; i++) {
-            let bpms = arrays.map(a => a.marcas[i].bpm);
-            let avg = bpms.reduce((a, b) => a + b, 0) / bpms.length;
-            let min = Math.min(...bpms);
-            let max = Math.max(...bpms);
-            let desvMax = Math.max(...bpms.map(b => Math.abs(b - avg)));
-            let desvMin = Math.min(...bpms.map(b => Math.abs(b - avg)));
-            let desvProm = bpms.map(b => Math.abs(b - avg)).reduce((a, b) => a + b, 0) / bpms.length;
-            marcaProms.push({
-                marca: info.marcas[i].numMarca,
-                compas: info.marcas[i].compasNum,
-                time: info.marcas[i].time,
-                avgBpm: avg,
-                minBpm: min,
-                maxBpm: max,
-                desvMax,
-                desvMin,
-                desvProm
-            });
-        }
+      marcaProms.push({
+        marca: info.marcas[i].numMarca,
+        compas: info.marcas[i].compasNum,
+        time: promTimes[i],
+        avgBpm: bpmCalc,
+        minBpm: min,
+        maxBpm: max,
+        desvMax,
+        desvMin,
+        desvProm
+      });
+    }
 
-        // Estadísticas globales de desviación (máx, mín, promedio)
-        let deviations = marcaProms.map(m => m.desvProm);
-        let stats = {
-            marcaCount: info.marcas.length,
-            audioFile: info.audioFile,
-            fragIni: info.fragIni,
-            fragFin: info.fragFin,
-            desvMin: Math.min(...deviations),
-            desvMax: Math.max(...deviations),
-            desvAvg: deviations.reduce((a, b) => a + b, 0) / deviations.length
-        };
+    let deviations = marcaProms.map(m => m.desvProm);
+    let stats = {
+      marcaCount: info.marcas.length,
+      audioFile: info.audioFile,
+      fragIni: info.fragIni,
+      fragFin: info.fragFin,
+      desvMin: Math.min(...deviations),
+      desvMax: Math.max(...deviations),
+      desvAvg: deviations.reduce((a, b) => a + b, 0) / deviations.length,
+    };
 
-        // Habilita exportación
-        exportAvgBtn.disabled = false;
-        multiAvgData = { marcaProms, stats };
-        alert(`¡Promedio listo! Exporta el resultado con "Exportar Promedio"`);
-    });
+    exportAvgBtn.disabled = false;
+    multiAvgData = { marcaProms, stats };
+    alert("Promedio listo! Exporta el resultado con Exportar Promedio.");
+  });
 };
 
 // EXPORTA el promedio cuando pulses

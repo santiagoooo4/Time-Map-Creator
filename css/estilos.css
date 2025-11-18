@@ -278,7 +278,7 @@ header .subtitle {
     width:100%; margin-bottom:10px;
 }
 .graph-wrap { border:2px solid #2196F3; height:142px; }
-.durcompas-wrap { border:2px solid #FFC107; height:66px; }
+.durcompas-wrap { border:2px solid #FFC107; height:142px; }
 #bpmGraph, #durCompasGraph { display:block; }
 .playback-controls-row {
     display: flex;
