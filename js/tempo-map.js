@@ -789,100 +789,126 @@ importMultiBtn.onclick = () => {
 };
 
 multiImportCsv.onchange = (e) => {
-  const files = multiImportCsv.files;
-  if (!files || files.length < 2) {
-    alert('Selecciona al menos dos archivos CSV para promediar.');
-    exportAvgBtn.disabled = true;
-    return;
-  }
-  let fileReads = [];
-  for (let f = 0; f < files.length; f++) {
-    fileReads.push(new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = function(evt) {
-        // Mantén aquí la lógica de parseo original de cada archivo individual,
-        // por ejemplo cómo parseas marcas, audioFile, fragIni, fragFin, marcas, etc...
-        // Aquí solo debes usar tu parse CSV existente
-        let data = evt.target.result;
-        // Si tu parseo es robusto y retorna: { audioFile, fragIni, fragFin, marcas }
-        // entonces sólo deja ese bloque aquí y NO lo modifiques.
-        // Puedes dejar la línea siguiente si todo funciona
-        resolve({ audioFile, fragIni, fragFin, marcas });
-      };
-      reader.onerror = reject;
-      reader.readAsText(files[f]);
-    }));
-  }
-
-  Promise.all(fileReads).then(arrays => {
-    // Validar headers/audios iguales
-    let info = arrays[0];
-    let ok = arrays.every(a =>
-      a.audioFile === info.audioFile &&
-      Math.abs(a.fragIni - info.fragIni) < 0.001 &&
-      Math.abs(a.fragFin - info.fragFin) < 0.001 &&
-      a.marcas.length === info.marcas.length
-    );
-    if (!ok) {
-      alert("Todos los archivos deben tener el mismo audio, fragmento y cantidad de marcas.");
-      exportAvgBtn.disabled = true;
-      return;
+    const files = multiImportCsv.files;
+    if (!files || files.length < 2) {
+        alert('Selecciona al menos dos archivos CSV para promediar.');
+        return;
+    }
+    let parsed = [];
+    let info = null;
+    let fileReads = [];
+    for (let f = 0; f < files.length; f++) {
+        fileReads.push(new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = function(evt) {
+                let text = evt.target.result;
+                let lines = text.split(/\r?\n/);
+                let audioFile = '';
+                let fragIni = 0, fragFin = 0, marcas = [];
+                for (let l = 0; l < lines.length; l++) {
+                    let line = lines[l].trim();
+                    if (line.startsWith('AudioFile,')) audioFile = line.split(',')[1]?.trim();
+                    if (line.startsWith('FragmentStart,')) fragIni = parseFloat(line.split(',')[1]?.trim() ?? '0');
+                    if (line.startsWith('FragmentEnd,')) fragFin = parseFloat(line.split(',')[1]?.trim() ?? '0');
+                    if (line.startsWith('Marca')) continue; // Saltar cabecera
+                    if (line.match(/^\d+,/)) {
+                        let [numMarca, numCompas, tSeg, bpmVal] = line.split(',');
+                        marcas.push({
+                            numMarca: parseInt(numMarca),
+                            compasNum: parseInt(numCompas),
+                            time: parseFloat(tSeg),
+                            bpm: bpmVal === 'N/A' ? null : parseFloat(bpmVal),
+                        });
+                    }
+                }
+                resolve({ audioFile, fragIni, fragFin, marcas });
+            };
+            reader.onerror = reject;
+            reader.readAsText(files[f]);
+        }));
     }
 
-    // Promediar tiempos (y recalcular BPMs según tiempo promediado)
+    // Espera a leer todos los archivos
+    Promise.all(fileReads).then(arrays => {
+        // Validar todos los archivos tengan mismo audioFile, mismos fragmentos y misma cantidad de marcas
+        info = arrays[0];
+        let ok = arrays.every(a =>
+            a.audioFile === info.audioFile &&
+            Math.abs(a.fragIni - info.fragIni) < 0.001 &&
+            Math.abs(a.fragFin - info.fragFin) < 0.001 &&
+            a.marcas.length === info.marcas.length
+        );
+        if (!ok) {
+            alert('Todos los archivos deben tener el mismo audio, fragmento y cantidad de marcas.');
+            exportAvgBtn.disabled = true;
+            return;
+        }
+
+        // Promedio y estadísticas para cada marca
+        // Promedio y estadísticas para cada marca
     let marcaProms = [];
-    let promTimes = [];
-
-    // Paso 1: calcular el tiempo promedio para cada marca
     for (let i = 0; i < info.marcas.length; i++) {
-      let tiempos = arrays.map(a => a.marcas[i].time);
-      let tProm = tiempos.reduce((a, b) => a + b, 0) / tiempos.length;
-      promTimes.push(tProm);
+        // Promediar tiempos de todas las mediciones para la marca i
+        let times = arrays.map(a => a.marcas[i].time);
+        let avgTime = times.reduce((a,b)=>a+b,0)/times.length;
+
+        // Calcular bpm usando el intervalo promediado con respect a avgTime_i y avgTime_(i-1)
+        // (excepto para la primera, donde bpm no tiene sentido)
+        let bpmProm = null, delta = null;
+        if(i > 0) {
+            let prevTimes = arrays.map(a => a.marcas[i-1].time);
+            let avgPrevTime = prevTimes.reduce((a,b)=>a+b,0)/prevTimes.length;
+            delta = avgTime - avgPrevTime;
+            bpmProm = delta > 0 ? 60.0 / delta : null;
+        }
+
+        // Para estadísticas: desviación de tiempos (en seg), min, max de bpm crudos por archivo
+        let bpms = [];
+        for (let k = 0; k < arrays.length; k++) {
+            let t = times[k], tPrev = i > 0 ? arrays[k].marcas[i-1].time : null;
+            bpms.push((i > 0 && tPrev !== null && t !== null) ? (60.0 / (t - tPrev)) : null);
+        }
+        let avgBpm = bpmProm; // el bpm promedio para exportar
+        let minBpm = Math.min(...bpms.filter(x=>x != null));
+        let maxBpm = Math.max(...bpms.filter(x=>x != null));
+        let desvMax = Math.max(...bpms.map(b => Math.abs(b - avgBpm)).filter(x=>x != null));
+        let desvMin = Math.min(...bpms.map(b => Math.abs(b - avgBpm)).filter(x=>x != null));
+        let desvProm = bpms.filter(x=>x != null).map(b => Math.abs(b - avgBpm)).reduce((a, b) => a + b, 0) / bpms.filter(x=>x != null).length;
+        // Desviación en tiempos (seg)
+        let desvTime = times.map(t=>Math.abs(t-avgTime)).reduce((a,b)=>a+b,0)/times.length;
+
+        marcaProms.push({
+            marca: info.marcas[i].numMarca,
+            compas: info.marcas[i].compasNum,
+            time: avgTime,
+            avgBpm: avgBpm,
+            minBpm: minBpm,
+            maxBpm: maxBpm,
+            desvMax: desvMax,
+            desvMin: desvMin,
+            desvProm: desvProm,
+            desvTime: desvTime
+        });
     }
 
-    // Paso 2: calcular BPM promedio para cada marca, usando los tiempos promediados
-    for (let i = 0; i < info.marcas.length; i++) {
-      let bpms = arrays.map(a => a.marcas[i].bpm);
-      let bpmCalc = null;
-      if (i > 0) {
-        let dur = promTimes[i] - promTimes[i - 1];
-        bpmCalc = dur > 0 ? 60 / dur : null;
-      }
-      let min = Math.min(...bpms);
-      let max = Math.max(...bpms);
-      let avg = bpms.reduce((a, b) => a + b, 0) / bpms.length;
-      let desvMax = Math.max(...bpms.map(b => Math.abs(b - avg)));
-      let desvMin = Math.min(...bpms.map(b => Math.abs(b - avg)));
-      let desvProm = bpms.map(b => Math.abs(b - avg)).reduce((a, b) => a + b, 0) / bpms.length;
 
-      marcaProms.push({
-        marca: info.marcas[i].numMarca,
-        compas: info.marcas[i].compasNum,
-        time: promTimes[i],
-        avgBpm: bpmCalc,
-        minBpm: min,
-        maxBpm: max,
-        desvMax,
-        desvMin,
-        desvProm
-      });
-    }
+        // Estadísticas globales de desviación (máx, mín, promedio)
+        let deviations = marcaProms.map(m => m.desvProm);
+        let stats = {
+            marcaCount: info.marcas.length,
+            audioFile: info.audioFile,
+            fragIni: info.fragIni,
+            fragFin: info.fragFin,
+            desvMin: Math.min(...deviations),
+            desvMax: Math.max(...deviations),
+            desvAvg: deviations.reduce((a, b) => a + b, 0) / deviations.length
+        };
 
-    let deviations = marcaProms.map(m => m.desvProm);
-    let stats = {
-      marcaCount: info.marcas.length,
-      audioFile: info.audioFile,
-      fragIni: info.fragIni,
-      fragFin: info.fragFin,
-      desvMin: Math.min(...deviations),
-      desvMax: Math.max(...deviations),
-      desvAvg: deviations.reduce((a, b) => a + b, 0) / deviations.length,
-    };
-
-    exportAvgBtn.disabled = false;
-    multiAvgData = { marcaProms, stats };
-    alert("Promedio listo! Exporta el resultado con Exportar Promedio.");
-  });
+        // Habilita exportación
+        exportAvgBtn.disabled = false;
+        multiAvgData = { marcaProms, stats };
+        alert(`¡Promedio listo! Exporta el resultado con "Exportar Promedio"`);
+    });
 };
 
 // EXPORTA el promedio cuando pulses
@@ -891,11 +917,11 @@ exportAvgBtn.onclick = () => {
     let stats = multiAvgData.stats;
     let marcaProms = multiAvgData.marcaProms;
     let csv = `AudioFile,${stats.audioFile}\nFragmentStart,${stats.fragIni.toFixed(3)}\nFragmentEnd,${stats.fragFin.toFixed(3)}\n`;
-    csv += `Marca,Compás,Tiempo (segundos),BPM promedio,BPM mínimo,BPM máximo,Desviación máx,Desviación mín,Desviación prom\n`;
-
+    csv += `Marca,Compás,Tiempo (segundos),BPM promedio,BPM mínimo,BPM máximo,Desviación máx,Desviación mín,Desviación prom,Desviación tiempo (s)\n`;
     marcaProms.forEach(m => {
-        csv += `${m.marca},${m.compas},${m.time.toFixed(3)},${m.avgBpm.toFixed(2)},${m.minBpm.toFixed(2)},${m.maxBpm.toFixed(2)},${m.desvMax.toFixed(2)},${m.desvMin.toFixed(2)},${m.desvProm.toFixed(2)}\n`;
+        csv += `${m.marca},${m.compas},${m.time.toFixed(3)},${m.avgBpm?.toFixed(2)||'N/A'},${m.minBpm?.toFixed(2)||'N/A'},${m.maxBpm?.toFixed(2)||'N/A'},${m.desvMax?.toFixed(2)||'N/A'},${m.desvMin?.toFixed(2)||'N/A'},${m.desvProm?.toFixed(2)||'N/A'},${m.desvTime?.toFixed(3)||'N/A'}\n`;
     });
+
 
     // Estadísticas globales al final
     csv += `\nDesviacion maxima entre marcas,${stats.desvMax.toFixed(2)}\nDesviacion minima entre marcas,${stats.desvMin.toFixed(2)}\nDesviacion promedio entre marcas,${stats.desvAvg.toFixed(2)}\n`;
